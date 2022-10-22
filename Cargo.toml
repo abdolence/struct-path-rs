@@ -1,6 +1,6 @@
 [workspace]
 
 members = [
-    "derive",
-    "derive_test"
+    "macro",
+    "lib_tests"
 ]
