@@ -34,10 +34,10 @@
 //! let s2: &str = path!(TestStructParent::value_child.child_value_str) ;
 //!
 //! // returns ["value_str", "value_num"]
-//! let arr: [&str] = path!(TestStructParent::{ value_str, value_num });
+//! let arr: [&str; 2] = path!(TestStructParent::{ value_str, value_num });
 //!
 //! // options, returns "valueChild/childValueStr"
-//! let s2: &str = path!(TestStructParent::value_child.child_value_str; delim='/', case='camel') ;
+//! let s2: &str = path!(TestStructParent::value_child.child_value_str; delim='/', case="camel") ;
 //!
 //! }
 //!
