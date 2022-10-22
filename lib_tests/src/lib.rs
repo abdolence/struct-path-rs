@@ -24,7 +24,8 @@ mod tests {
         let test_with_child = path!(TestStructParent::value_child.child_value_str);
         assert_eq!(test_with_child, "value_child.child_value_str");
 
-        let test_another_delim = path!(TestStructParent::value_child.child_value_str; delim = "/", case = "camel");
+        let test_another_delim =
+            path!(TestStructParent::value_child.child_value_str; delim = "/", case = "camel");
         assert_eq!(test_another_delim, "valueChild/childValueStr");
 
         let test_full_path = path!(crate::tests::TestStructParent::value_str);
