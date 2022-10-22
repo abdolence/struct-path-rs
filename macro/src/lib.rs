@@ -1,8 +1,45 @@
 //! A helper macros implementation to build a string that represents struct fields path at compile time.
 //!
+//! Library provides a tiny macro implementation to reference Rust struct fields at compile time to represent its string format.
+//! This is needed to work with JSON paths, and some others protocols when we still want to rely on the compiler to avoid inconsistent changes.
+//!
+//! Features:
+//! - Fast and no macro parsing without huge deps;
+//! - Macro produces the code to verify if the specified path really exists;
+//! - Multiple fields/arrays support
+//! - Optional camelCase and PascalCase conversion support;
+//! - Optional delimiter parameter;
 //! Example:
-//! ```
+//!
+//! ```rust,no_run
 //! use struct_path::*;
+//!
+//! fn example() {
+//!
+//! pub struct TestStructParent {
+//!     pub value_str: String,
+//!     pub value_num: u64,
+//!     pub value_child: TestStructChild,
+//! }
+//!
+//! pub struct TestStructChild {
+//!     pub child_value_str: String,
+//!     pub child_value_num: u64,
+//! }
+//!
+//! // returns "value_str"
+//! let s1: &str = path!(TestStructParent::value_str);
+//!
+//! // returns "value_child.child_value_str"
+//! let s2: &str = path!(TestStructParent::value_child.child_value_str) ;
+//!
+//! // returns ["value_str", "value_num"]
+//! let arr: [&str] = path!(TestStructParent::{ value_str, value_num });
+//!
+//! // options, returns "valueChild/childValueStr"
+//! let s2: &str = path!(TestStructParent::value_child.child_value_str; delim='/', case='camel') ;
+//!
+//! }
 //!
 //! ```
 //!

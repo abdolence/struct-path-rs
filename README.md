@@ -5,10 +5,11 @@
 # struct-path for Rust
 
 Library provides a tiny macro implementation to reference Rust struct fields at compile time to represent its string format.
-This is needed to work with JSON paths and others protocols where the serialization like this is needed:
+This is needed to work with JSON paths, and some others protocols when we still want to rely on the compiler to avoid inconsistent changes.
 
 Features:
 - Fast and no macro parsing without huge deps;
+- Macro produces the code to verify if the specified path really exists;
 - Multiple fields/arrays support
 - Optional camelCase and PascalCase conversion support;
 - Optional delimiter parameter;
@@ -44,11 +45,10 @@ let s1: &str = path!(TestStructParent::value_str);
 let s2: &str = path!(TestStructParent::value_child.child_value_str) ;
 
 // returns ["value_str", "value_num"]
-let arr: [&str] = path!(TestStructParent:: { value_str, value_num } );
+let arr: [&str] = path!(TestStructParent::{ value_str, value_num });
 
 // options, returns "valueChild/childValueStr"
 let s2: &str = path!(TestStructParent::value_child.child_value_str; delim='/', case='camel') ;
-
 
 ```
 
