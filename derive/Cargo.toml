@@ -1,0 +1,24 @@
+[package]
+name = "struct-path"
+version = "0.1.0"
+authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
+edition = "2021"
+license = "Apache-2.0"
+description = "A helper macros implementation to build a string that represents struct fields path at compile time (such as <field-name>.<field-name>)"
+homepage = "https://github.com/abdolence/struct-path-rs"
+repository = "https://github.com/abdolence/struct-path-rs"
+documentation = "https://github.com/abdolence/struct-path-rs"
+keywords = ["struct", "path", "json"]
+categories = ["rust-patterns"]
+readme = "../README.md"
+include = ["Cargo.toml", "src/**/*.rs", "../README.md", "../LICENSE"]
+
+[lib]
+name = "struct_path"
+proc-macro = true
+path = "src/lib.rs"
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "1.0", features = [ "full" ]}
