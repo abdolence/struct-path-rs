@@ -44,14 +44,12 @@
 //! ```
 //!
 
+use convert_case::{Case, Casing};
 use proc_macro::{TokenStream, TokenTree};
 use std::collections::HashMap;
-use convert_case::{Case, Casing};
 
 #[proc_macro]
 pub fn path(struct_path_stream: TokenStream) -> TokenStream {
-    let mut it = struct_path_stream.into_iter();
-
     let mut found_struct_name: Option<String> = None;
     let mut found_struct_fields: Vec<String> = Vec::with_capacity(16);
 
@@ -63,18 +61,23 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
     let mut current_field_path: Option<String> = None;
 
     let mut current_option_name: Option<String> = None;
-    let mut expect_option_value: bool =false;
+    let mut expect_option_value: bool = false;
 
-    let mut options: HashMap<String,String> = HashMap::new();
+    let mut options: HashMap<String, String> = HashMap::new();
 
-    while let Some(token_tree) = it.next() {
+    for token_tree in struct_path_stream.into_iter() {
         match token_tree {
             TokenTree::Ident(id) if found_struct_name.is_none() => {
                 found_struct_name = Some(id.to_string());
                 options_opened = false;
             }
-            TokenTree::Punct(punct) if found_struct_name.is_some() && !opened_struct && punct == ':' && colons_counter < 2 => {
-                colons_counter = colons_counter + 1;
+            TokenTree::Punct(punct)
+                if found_struct_name.is_some()
+                    && !opened_struct
+                    && punct == ':'
+                    && colons_counter < 2 =>
+            {
+                colons_counter += 1;
                 if colons_counter > 1 {
                     opened_struct = true;
                 }
@@ -87,8 +90,13 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
                     current_field_path = Some(id.to_string());
                 }
             }
-            TokenTree::Punct(punct) if found_struct_name.is_some() && opened_struct && punct == ':' && colons_counter < 2 => {
-                colons_counter = colons_counter + 1;
+            TokenTree::Punct(punct)
+                if found_struct_name.is_some()
+                    && opened_struct
+                    && punct == ':'
+                    && colons_counter < 2 =>
+            {
+                colons_counter += 1;
                 opened_struct = false;
                 if let Some(ref mut field_path) = current_field_path.take() {
                     if let Some(ref mut struct_name) = &mut found_struct_name {
@@ -99,9 +107,12 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
             }
             TokenTree::Punct(punct) if opened_struct && punct == '.' => {
                 if let Some(ref mut field_path) = &mut current_field_path {
-                    field_path.push_str(".");
+                    field_path.push('.');
                 } else {
-                    panic!("Unexpected punctuation input for struct path group parameters: {:?}", punct)
+                    panic!(
+                        "Unexpected punctuation input for struct path group parameters: {:?}",
+                        punct
+                    )
                 }
             }
             TokenTree::Group(group) if opened_struct && current_field_path.is_none() => {
@@ -117,10 +128,10 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
             }
             TokenTree::Ident(id) if options_opened && expect_option_value => {
                 expect_option_value = false;
-                match current_option_name.take()  {
+                match current_option_name.take() {
                     Some(option_name) => {
-                        options.insert(option_name,id.to_string());
-                    },
+                        options.insert(option_name, id.to_string());
+                    }
                     _ => {
                         panic!("Wrong options format")
                     }
@@ -128,11 +139,14 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
             }
             TokenTree::Literal(lit) if options_opened && expect_option_value => {
                 expect_option_value = false;
-                match current_option_name.take()  {
+                match current_option_name.take() {
                     Some(option_name) => {
                         let lit_str = lit.to_string();
-                        options.insert(option_name,lit_str.as_str()[1..lit_str.len() - 1].to_string());
-                    },
+                        options.insert(
+                            option_name,
+                            lit_str.as_str()[1..lit_str.len() - 1].to_string(),
+                        );
+                    }
                     _ => {
                         panic!("Wrong options format")
                     }
@@ -155,35 +169,46 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
     }
 
     if let Some(struct_name) = found_struct_name {
-        let check_functions = found_struct_fields.iter().map(|field_path| {
-            format!(r#"
+        let check_functions = found_struct_fields
+            .iter()
+            .map(|field_path| {
+                format!(
+                    r#"
                 {{
                     #[allow(dead_code, unused_variables)]
                     fn _test_struct_field(test_struct: &{}) {{
                         let _t = &test_struct.{};
                     }}
                 }}
-            "#, struct_name, field_path)
-        }).collect::<Vec<String>>().join("\n");
+            "#,
+                    struct_name, field_path
+                )
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
 
-        found_struct_fields = found_struct_fields.iter().map(|field_path| {
-            let mut final_field_path = field_path.clone();
-            if !options.is_empty() {
-                final_field_path = apply_options(&options, final_field_path);
-            }
-            format!("\"{}\"", final_field_path)
-        }).collect();
-
-        let result_str =
-            if expected_multiple_fields {
-                format!("{{{}\n[{}]}}", check_functions, found_struct_fields.join(","))
-            } else {
-                if let Some(field_path) = found_struct_fields.pop() {
-                    format!("{{{}\n{}}}", check_functions, field_path)
-                } else {
-                    panic!("Empty struct fields")
+        found_struct_fields = found_struct_fields
+            .iter()
+            .map(|field_path| {
+                let mut final_field_path = field_path.clone();
+                if !options.is_empty() {
+                    final_field_path = apply_options(&options, final_field_path);
                 }
-            };
+                format!("\"{}\"", final_field_path)
+            })
+            .collect();
+
+        let result_str = if expected_multiple_fields {
+            format!(
+                "{{{}\n[{}]}}",
+                check_functions,
+                found_struct_fields.join(",")
+            )
+        } else if let Some(field_path) = found_struct_fields.pop() {
+            format!("{{{}\n{}}}", check_functions, field_path)
+        } else {
+            panic!("Empty struct fields")
+        };
         result_str.parse().unwrap()
     } else {
         panic!("No structure name is specified")
@@ -192,10 +217,9 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
 
 #[inline]
 fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Vec<String>) {
-    let mut it = group_stream.into_iter();
     let mut current_field_path: Option<String> = None;
 
-    while let Some(token_tree) = it.next() {
+    for token_tree in group_stream.into_iter() {
         match token_tree {
             TokenTree::Ident(id) => {
                 if let Some(ref mut field_path) = &mut current_field_path {
@@ -209,18 +233,27 @@ fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Ve
                     found_struct_fields.push(field_path);
                     current_field_path = None;
                 } else {
-                    panic!("Unexpected punctuation input for struct path group parameters: {:?}", punct)
+                    panic!(
+                        "Unexpected punctuation input for struct path group parameters: {:?}",
+                        punct
+                    )
                 }
             }
             TokenTree::Punct(punct) if punct == '.' => {
                 if let Some(ref mut field_path) = &mut current_field_path {
-                    field_path.push_str(".");
+                    field_path.push('.');
                 } else {
-                    panic!("Unexpected punctuation input for struct path group parameters: {:?}", punct)
+                    panic!(
+                        "Unexpected punctuation input for struct path group parameters: {:?}",
+                        punct
+                    )
                 }
             }
             others => {
-                panic!("Unexpected input for struct path group parameters: {:?}", others)
+                panic!(
+                    "Unexpected input for struct path group parameters: {:?}",
+                    others
+                )
             }
         }
     }
@@ -231,8 +264,12 @@ fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Ve
 }
 
 #[inline]
-fn apply_options(options: &HashMap<String,String>, field_path: String) -> String {
-    let delim = options.get("delim").as_ref().map(|s| s.as_str()).unwrap_or_else(|| ".");
+fn apply_options(options: &HashMap<String, String>, field_path: String) -> String {
+    let delim = options
+        .get("delim")
+        .as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| ".");
     let case = options.get("case");
     field_path
         .split('.')
@@ -241,10 +278,9 @@ fn apply_options(options: &HashMap<String,String>, field_path: String) -> String
                 match case_value.as_str() {
                     "camel" => field_name.from_case(Case::Snake).to_case(Case::Camel),
                     "pascal" => field_name.from_case(Case::Snake).to_case(Case::Pascal),
-                    another => panic!("Unknown case is specified: {}", another)
+                    another => panic!("Unknown case is specified: {}", another),
                 }
-            }
-            else {
+            } else {
                 field_name.to_string()
             }
         })
