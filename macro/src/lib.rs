@@ -50,12 +50,11 @@ use std::collections::HashMap;
 
 #[proc_macro]
 pub fn path(struct_path_stream: TokenStream) -> TokenStream {
-    let mut found_struct_name: Option<String> = None;
-    let mut found_struct_fields: Vec<String> = Vec::with_capacity(16);
+    let mut current_struct_name: Option<String> = None;
+    let mut current_struct_fields: Vec<String> = Vec::with_capacity(16);
 
     let mut opened_struct = false;
     let mut colons_counter = 0;
-    let mut expected_multiple_fields = false;
     let mut options_opened = false;
 
     let mut current_field_path: Option<String> = None;
@@ -64,15 +63,15 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
     let mut expect_option_value: bool = false;
 
     let mut options: HashMap<String, String> = HashMap::new();
+    let mut found_structs: Vec<(String, Vec<String>)> = Vec::new();
 
     for token_tree in struct_path_stream.into_iter() {
         match token_tree {
-            TokenTree::Ident(id) if found_struct_name.is_none() => {
-                found_struct_name = Some(id.to_string());
-                options_opened = false;
+            TokenTree::Ident(id) if current_struct_name.is_none() => {
+                current_struct_name = Some(id.to_string());
             }
             TokenTree::Punct(punct)
-                if found_struct_name.is_some()
+                if current_struct_name.is_some()
                     && !opened_struct
                     && punct == ':'
                     && colons_counter < 2 =>
@@ -91,7 +90,7 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
                 }
             }
             TokenTree::Punct(punct)
-                if found_struct_name.is_some()
+                if current_struct_name.is_some()
                     && opened_struct
                     && punct == ':'
                     && colons_counter < 2 =>
@@ -99,7 +98,7 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
                 colons_counter += 1;
                 opened_struct = false;
                 if let Some(ref mut field_path) = current_field_path.take() {
-                    if let Some(ref mut struct_name) = &mut found_struct_name {
+                    if let Some(ref mut struct_name) = &mut current_struct_name {
                         struct_name.push_str("::");
                         struct_name.push_str(field_path);
                     }
@@ -116,8 +115,24 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
                 }
             }
             TokenTree::Group(group) if opened_struct && current_field_path.is_none() => {
-                expected_multiple_fields = true;
-                parse_multiple_fields(group.stream(), &mut found_struct_fields)
+                parse_multiple_fields(group.stream(), &mut current_struct_fields)
+            }
+            TokenTree::Punct(punct) if !options_opened && opened_struct && punct == ',' => {
+                opened_struct = false;
+                colons_counter = 0;
+                if let Some(struct_name) = current_struct_name.take() {
+                    if let Some(field_path) = current_field_path.take() {
+                        current_struct_fields.push(field_path);
+                    }
+                    if !current_struct_fields.is_empty() {
+                        found_structs
+                            .push((struct_name, current_struct_fields.drain(..).collect()));
+                    } else {
+                        panic!("Unexpected comma with empty fields for {}!", struct_name);
+                    }
+                } else {
+                    panic!("Unexpected comma with empty definitions!");
+                }
             }
             TokenTree::Punct(punct) if punct == ';' && opened_struct && !options_opened => {
                 options_opened = true;
@@ -159,60 +174,33 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
                 expect_option_value = false;
             }
             others => {
+                println!(
+                    "{} {:?} {:?}",
+                    opened_struct, current_struct_name, current_struct_fields
+                );
                 panic!("Unexpected input for struct path parameters: {:?}", others)
             }
         }
     }
 
     if let Some(field_path) = current_field_path.take() {
-        found_struct_fields.push(field_path);
+        current_struct_fields.push(field_path);
     }
 
-    if let Some(struct_name) = found_struct_name {
-        let check_functions = found_struct_fields
-            .iter()
-            .map(|field_path| {
-                format!(
-                    r#"
-                {{
-                    #[allow(dead_code, unused_variables)]
-                    fn _test_struct_field(test_struct: &{}) {{
-                        let _t = &test_struct.{};
-                    }}
-                }}
-            "#,
-                    struct_name, field_path
-                )
-            })
-            .collect::<Vec<String>>()
-            .join("\n");
-
-        found_struct_fields = found_struct_fields
-            .iter()
-            .map(|field_path| {
-                let mut final_field_path = field_path.clone();
-                if !options.is_empty() {
-                    final_field_path = apply_options(&options, final_field_path);
-                }
-                format!("\"{}\"", final_field_path)
-            })
-            .collect();
-
-        let result_str = if expected_multiple_fields {
-            format!(
-                "{{{}\n[{}]}}",
-                check_functions,
-                found_struct_fields.join(",")
-            )
-        } else if let Some(field_path) = found_struct_fields.pop() {
-            format!("{{{}\n{}}}", check_functions, field_path)
+    if let Some(struct_name) = current_struct_name.take() {
+        if let Some(field_path) = current_field_path.take() {
+            current_struct_fields.push(field_path);
+        }
+        if !current_struct_fields.is_empty() {
+            found_structs.push((struct_name, current_struct_fields.drain(..).collect()));
         } else {
-            panic!("Empty struct fields")
-        };
-        result_str.parse().unwrap()
+            panic!("Unexpected comma with empty fields for {}!", struct_name);
+        }
     } else {
-        panic!("No structure name is specified")
+        panic!("Unexpected comma with empty definitions!");
     }
+
+    generate_code_for(found_structs, &options).parse().unwrap()
 }
 
 #[inline]
@@ -260,6 +248,60 @@ fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Ve
 
     if let Some(field_path) = current_field_path.take() {
         found_struct_fields.push(field_path);
+    }
+}
+
+#[inline]
+fn generate_code_for(
+    found_structs: Vec<(String, Vec<String>)>,
+    options: &HashMap<String, String>,
+) -> String {
+    let mut all_check_functions = String::new();
+
+    for (struct_name, struct_fields) in &found_structs {
+        let check_functions = struct_fields
+            .iter()
+            .map(|field_path| {
+                format!(
+                    r#"
+                {{
+                    #[allow(dead_code, unused_variables)]
+                    fn _test_struct_field(test_struct: &{}) {{
+                        let _t = &test_struct.{};
+                    }}
+                }}
+            "#,
+                    struct_name, field_path
+                )
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        all_check_functions.push_str(&check_functions);
+    }
+
+    let mut all_final_fields: Vec<String> = Vec::with_capacity(16);
+
+    for (_, struct_fields) in &found_structs {
+        for field_path in struct_fields {
+            let mut final_field_path = field_path.clone();
+            if !options.is_empty() {
+                final_field_path = apply_options(&options, final_field_path);
+            }
+            all_final_fields.push(format!("\"{}\"", final_field_path))
+        }
+    }
+
+    if all_final_fields.len() > 1 {
+        format!(
+            "{{{}\n[{}]}}",
+            all_check_functions,
+            all_final_fields.join(",")
+        )
+    } else if let Some(field_path) = all_final_fields.pop() {
+        format!("{{{}\n{}}}", all_check_functions, field_path)
+    } else {
+        panic!("Empty struct fields")
     }
 }
 

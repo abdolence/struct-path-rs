@@ -26,9 +26,16 @@ mod tests {
 
         let test_another_delim =
             path!(TestStructParent::value_child.child_value_str; delim = "/", case = "camel");
+
         assert_eq!(test_another_delim, "valueChild/childValueStr");
 
         let test_full_path = path!(crate::tests::TestStructParent::value_str);
         assert_eq!(test_full_path, "value_str");
+
+        let test_multiple_types = path!(TestStructParent::value_str,TestStructChild::child_value_str);
+        assert_eq!(test_multiple_types, ["value_str", "child_value_str"]);
+
+        let test_multiple_types_mixed = path!(TestStructParent::{ value_str, value_num },TestStructChild::child_value_str);
+        assert_eq!(test_multiple_types_mixed, ["value_str", "value_num" , "child_value_str"]);
     }
 }
