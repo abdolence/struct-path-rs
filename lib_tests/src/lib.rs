@@ -14,12 +14,9 @@ mod tests {
     }
 
     #[test]
-    fn struct_paths() {
+    fn struct_path() {
         let test_simple = path!(TestStructParent::value_str);
         assert_eq!(test_simple, "value_str");
-
-        let test_multiple = path!(TestStructParent:: { value_str, value_num } );
-        assert_eq!(test_multiple, ["value_str", "value_num"]);
 
         let test_with_child = path!(TestStructParent::value_child.child_value_str);
         assert_eq!(test_with_child, "value_child.child_value_str");
@@ -32,10 +29,16 @@ mod tests {
         let test_full_path = path!(crate::tests::TestStructParent::value_str);
         assert_eq!(test_full_path, "value_str");
 
-        let test_multiple_types = path!(TestStructParent::value_str,TestStructChild::child_value_str);
-        assert_eq!(test_multiple_types, ["value_str", "child_value_str"]);
+        let test_mixed_path = path!(TestStructParent::value_str,TestStructChild::child_value_str);
+        assert_eq!(test_mixed_path, "value_str.child_value_str");
+    }
 
-        let test_multiple_types_mixed = path!(TestStructParent::{ value_str, value_num },TestStructChild::child_value_str);
-        assert_eq!(test_multiple_types_mixed, ["value_str", "value_num" , "child_value_str"]);
+    #[test]
+    fn struct_paths() {
+        let test_multiple = paths!(TestStructParent:: { value_str, value_num } );
+        assert_eq!(test_multiple, ["value_str", "value_num"]);
+
+        let test_multiple_types = paths!(TestStructParent::value_str,TestStructChild::child_value_str);
+        assert_eq!(test_multiple_types, ["value_str","child_value_str"]);
     }
 }

@@ -44,11 +44,15 @@ let s1: &str = path!(TestStructParent::value_str);
 // returns "value_child.child_value_str"
 let s2: &str = path!(TestStructParent::value_child.child_value_str) ;
 
-// returns ["value_str", "value_num"]
-let arr: [&str] = path!(TestStructParent::{ value_str, value_num });
+// returns also "value_child.child_value_str"
+let s3: &str = path!(TestStructParent::value_child,TestStructChild::child_value_str);
 
 // options, returns "valueChild/childValueStr"
-let s2: &str = path!(TestStructParent::value_child.child_value_str; delim='/', case='camel') ;
+let s4: &str = path!(TestStructParent::value_child.child_value_str; delim="/", case="camel") ;
+
+// returns ["value_str", "value_num"]
+let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
+
 
 ```
 
