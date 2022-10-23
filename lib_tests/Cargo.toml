@@ -11,5 +11,5 @@ documentation = "https://github.com/abdolence/struct-path-rs"
 publish = false
 
 [dependencies]
-struct-path = { version = "^0.2.1-alpha.0", path = "../macro"}
+struct-path = { version = "^0.2.3-alpha.0", path = "../macro"}
 
