@@ -19,7 +19,7 @@ Features:
 Cargo.toml:
 ```toml
 [dependencies]
-struct-path = "0.1"
+struct-path = "0.2"
 ```
 
 Example code:
