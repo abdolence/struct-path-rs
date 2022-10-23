@@ -440,7 +440,8 @@ fn generate_checks_code_for(found_structs: &Vec<(String, Vec<String>)>) -> Strin
                     r#"
                 {{
                     #[allow(dead_code, unused_variables)]
-                    fn _test_struct_field(test_struct: &{}) {{
+                    #[cold]
+                    fn _check_sp(test_struct: &{}) {{
                         let _t = &test_struct.{};
                     }}
                 }}
