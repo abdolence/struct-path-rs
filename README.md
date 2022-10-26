@@ -8,7 +8,7 @@ Library provides a tiny macro implementation to reference Rust struct fields at 
 This is needed to work with JSON paths, and some others protocols when we still want to rely on the compiler to avoid inconsistent changes.
 
 Features:
-- Fast and no macro parsing without huge deps;
+- Fast parsing without huge deps;
 - Macro produces the code to verify if the specified path really exists;
 - Multiple fields/arrays support
 - Optional camelCase and PascalCase conversion support;
