@@ -13,6 +13,7 @@ Features:
 - Multiple fields/arrays support
 - Optional camelCase and PascalCase conversion support;
 - Optional delimiter parameter;
+- Support for `Iter`-based (Option, Vec, etc) paths using `~` delimiter;
 
 ## Quick start
 
