@@ -107,9 +107,9 @@ pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
                     }
                 }
             }
-            TokenTree::Punct(punct) if opened_struct && punct == '.' => {
+            TokenTree::Punct(punct) if opened_struct && (punct == '.' || punct == '~') => {
                 if let Some(ref mut field_path) = &mut current_field_path {
-                    field_path.push('.');
+                    field_path.push(punct.as_char());
                 } else {
                     panic!(
                         "Unexpected punctuation input for struct path group parameters: {:?}",
@@ -205,7 +205,7 @@ pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
 
     for (_, struct_fields) in &found_structs {
         for field_path in struct_fields {
-            let mut final_field_path = field_path.clone();
+            let mut final_field_path = field_path.clone().replace('~', ".");
             if !options.is_empty() {
                 final_field_path = apply_options(&options, final_field_path);
             }
@@ -330,9 +330,9 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
                     }
                 }
             }
-            TokenTree::Punct(punct) if opened_struct && punct == '.' => {
+            TokenTree::Punct(punct) if opened_struct && (punct == '.' || punct == '~') => {
                 if let Some(ref mut field_path) = &mut current_field_path {
-                    field_path.push('.');
+                    field_path.push(punct.as_char());
                 } else {
                     panic!(
                         "Unexpected punctuation input for struct path group parameters: {:?}",
@@ -420,7 +420,7 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
 
     if let Some(full_field_path) = current_full_field_path.take() {
         let all_check_functions = generate_checks_code_for(&found_structs);
-        let final_field_path = apply_options(&options, full_field_path);
+        let final_field_path = apply_options(&options, full_field_path).replace('~', ".");
         let result_str = format!("{{{}\n\"{}\"}}", all_check_functions, final_field_path);
         result_str.parse().unwrap()
     } else {
@@ -436,6 +436,7 @@ fn generate_checks_code_for(found_structs: &Vec<(String, Vec<String>)>) -> Strin
         let check_functions = struct_fields
             .iter()
             .map(|field_path| {
+                let field_path_result = field_path.replace('~', ".iter().next().unwrap().");
                 format!(
                     r#"
                 {{
@@ -446,7 +447,7 @@ fn generate_checks_code_for(found_structs: &Vec<(String, Vec<String>)>) -> Strin
                     }}
                 }}
             "#,
-                    struct_name, field_path
+                    struct_name, field_path_result
                 )
             })
             .collect::<Vec<String>>()
