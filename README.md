@@ -49,11 +49,11 @@ let s2: &str = path!(TestStructParent::value_child.child_value_str) ;
 // returns also "value_child.child_value_str"
 let s3: &str = path!(TestStructParent::value_child,TestStructChild::child_value_str);
 
-// returns also "value_child.child_value_str" using trait `Iter`
-let s3: &str = path!(TestStructParent::opt_value_child~child_value_str);
+// returns "opt_value_child.child_value_str" using trait `Iter`
+let s4: &str = path!(TestStructParent::opt_value_child~child_value_str);
 
 // options, returns "valueChild/childValueStr"
-let s4: &str = path!(TestStructParent::value_child.child_value_str; delim="/", case="camel") ;
+let s5: &str = path!(TestStructParent::value_child.child_value_str; delim="/", case="camel") ;
 
 // returns ["value_str", "value_num"]
 let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
