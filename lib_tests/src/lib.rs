@@ -6,6 +6,7 @@ mod tests {
         pub value_str: String,
         pub value_num: u64,
         pub value_child: TestStructChild,
+        pub opt_value_child: Option<TestStructChild>,
     }
 
     pub struct TestStructChild {
@@ -34,6 +35,9 @@ mod tests {
             TestStructChild::child_value_str
         );
         assert_eq!(test_mixed_path, "value_str.child_value_str");
+
+        let test_opt_child = path!(TestStructParent::opt_value_child~child_value_str);
+        assert_eq!(test_opt_child, "opt_value_child.child_value_str");
     }
 
     #[test]
@@ -46,5 +50,10 @@ mod tests {
             TestStructChild::child_value_str
         );
         assert_eq!(test_multiple_types, ["value_str", "child_value_str"]);
+
+        let test_multiple_types = paths!(
+            TestStructParent::opt_value_child~child_value_str
+        );
+        assert_eq!(test_multiple_types, ["opt_value_child.child_value_str"]);
     }
 }

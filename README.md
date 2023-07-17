@@ -31,6 +31,7 @@ pub struct TestStructParent {
     pub value_str: String,
     pub value_num: u64,
     pub value_child: TestStructChild,
+    pub opt_value_str: Option<TestStructChild>,
 }
 
 pub struct TestStructChild {
@@ -46,6 +47,9 @@ let s2: &str = path!(TestStructParent::value_child.child_value_str) ;
 
 // returns also "value_child.child_value_str"
 let s3: &str = path!(TestStructParent::value_child,TestStructChild::child_value_str);
+
+// returns also "value_child.child_value_str" using trait `Iter`
+let s3: &str = path!(TestStructParent::opt_value_child~child_value_str);
 
 // options, returns "valueChild/childValueStr"
 let s4: &str = path!(TestStructParent::value_child.child_value_str; delim="/", case="camel") ;
