@@ -9,6 +9,7 @@
 //! - Multiple fields/arrays support
 //! - Optional camelCase and PascalCase conversion support;
 //! - Optional delimiter parameter;
+//!
 //! Example:
 //!
 //! ```rust,no_run
