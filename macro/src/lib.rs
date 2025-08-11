@@ -129,7 +129,7 @@ pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
                     }
                     if !current_struct_fields.is_empty() {
                         found_structs
-                            .push((struct_name, current_struct_fields.drain(..).collect()));
+                            .push((struct_name, std::mem::take(&mut current_struct_fields)));
                     } else {
                         panic!("Unexpected comma with empty fields for {}!", struct_name);
                     }
@@ -191,7 +191,7 @@ pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
             current_struct_fields.push(field_path);
         }
         if !current_struct_fields.is_empty() {
-            found_structs.push((struct_name, current_struct_fields.drain(..).collect()));
+            found_structs.push((struct_name, std::mem::take(&mut current_struct_fields)));
         } else {
             panic!("Unexpected comma with empty fields for {}!", struct_name);
         }
