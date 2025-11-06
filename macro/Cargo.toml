@@ -19,4 +19,4 @@ proc-macro = true
 path = "src/lib.rs"
 
 [dependencies]
-convert_case = "0.8"
+convert_case = "0.9"
