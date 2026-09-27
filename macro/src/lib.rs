@@ -372,10 +372,13 @@ fn parse_multiple_fields(
 /// would then be unknown to the macro.
 fn try_parse_all_fields(struct_path_stream: &TokenStream) -> Option<Result<TokenStream, String>> {
     let tokens: Vec<TokenTree> = struct_path_stream.clone().into_iter().collect();
-    let star_pos = tokens
+    if !tokens
         .iter()
-        .position(|t| matches!(t, TokenTree::Punct(p) if *p == '*'))?;
-    Some(parse_all_fields_at(&tokens, star_pos))
+        .any(|t| matches!(t, TokenTree::Punct(p) if *p == '*'))
+    {
+        return None;
+    }
+    Some(parse_all_fields_at(&tokens))
 }
 
 /// The only options `Type::*` recognizes; any other key is a `compile_error!`
@@ -395,35 +398,6 @@ const CANNOT_COMBINE_STAR_MESSAGE: &str = "`Type::*` cannot be combined with ano
 const EXPECTED_TYPE_PATH_MESSAGE: &str =
     "expected a type path such as `Type::*` or `crate::module::Type::*`";
 
-/// The options the nested `Type::*` form (`Parent::child.(Child::*)`)
-/// recognizes: `visibility`/`case` pick the inner type's names const exactly
-/// as the bare form does, and `delim` additionally separates the prefix's
-/// own segments and joins the prefix to each name -- there being a prefix
-/// here is what the bare form has no `delim` option for.
-const NESTED_STAR_OPTION_KEYS: &[&str] = &["visibility", "case", "delim"];
-
-/// Reported when a `{ ... }` field group appears before a nested `Type::*`:
-/// the nested form takes one dotted/tilde'd field path as its prefix, the
-/// same shape `path!` accepts, not a set of alternatives.
-const BRACE_BEFORE_NESTED_STAR_MESSAGE: &str = "a `{ ... }` field group cannot appear before a nested `Type::*`; use a plain field path such as `Parent::child.(Child::*)`";
-
-/// Reported when the parenthesized `Type::*` group is not directly preceded
-/// by `.` or `~` -- the token that marks where the prefix path ends and the
-/// nested type begins.
-const EXPECTED_CONNECTOR_BEFORE_NESTED_STAR_MESSAGE: &str =
-    "expected `.` or `~` immediately before a nested `Type::*`, e.g. `Parent::child.(Child::*)`";
-
-/// Reported when the prefix before a nested `Type::*` names a type but no
-/// field: `Parent.(Child::*)` has nothing to check the inner type against.
-const EMPTY_FIELD_BEFORE_NESTED_STAR_MESSAGE: &str =
-    "expected a field before the nested `Type::*`, e.g. `Parent::child.(Child::*)`";
-
-/// Reported when the parenthesized group holds anything other than a bare
-/// `Type::*`: another group nested inside it, most often, since that is the
-/// one shape a lone `*` scan cannot tell apart from a malformed inner type.
-const NESTED_PARENS_MESSAGE: &str =
-    "nesting a parenthesized group inside `Type::*` is not supported";
-
 /// Reported when the parenthesized group holds tokens after its own `*`:
 /// options belong after the closing `)`, not inside it.
 const NOTHING_AFTER_NESTED_STAR_MESSAGE: &str = "nothing may follow a nested `Type::*` inside the parentheses; put options after the closing `)`";
@@ -435,34 +409,81 @@ const CANNOT_COMBINE_NESTED_STAR_MESSAGE: &str = "a nested `Type::*` cannot be c
 
 /// Recognizes `paths!`'s nested `Type::*` form -- `Parent::field(.field|
 /// ~field)*.(Inner::*)` or the same ending in `~(Inner::*)`, optionally
-/// followed by `; options` -- by the one token no other `paths!`/`path!`
-/// input ever contains: a parenthesized group. Returns `None` when there is
-/// none, so every existing input falls through to the parsers that handled
+/// followed by `; options`. A `(...)` group on its own is not enough to mark
+/// this form: `paths!(Type::(a, b))` is master's plain field-group syntax in
+/// parenthesis rather than braces, and must still reach `parse_multiple_fields`
+/// unchanged. Only a `(...)` group directly preceded by `.`/`~`, or one that
+/// itself contains a `*`, is claimed here; every other input, including one
+/// with a `(...)` group elsewhere, falls through to the parsers that handled
 /// it before this form existed.
 fn try_parse_nested_star(tokens: &[TokenTree]) -> Option<Result<TokenStream, String>> {
     let paren_idx = tokens.iter().position(
         |t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis),
     )?;
+    let follows_connector = paren_idx
+        .checked_sub(1)
+        .is_some_and(|i| matches!(&tokens[i], TokenTree::Punct(p) if *p == '.' || *p == '~'));
+    let group = match &tokens[paren_idx] {
+        TokenTree::Group(g) => g,
+        _ => unreachable!(),
+    };
+    let contains_star = group
+        .stream()
+        .into_iter()
+        .any(|t| matches!(t, TokenTree::Punct(p) if p == '*'));
+    if !follows_connector && !contains_star {
+        return None;
+    }
     Some(parse_nested_star_at(tokens, paren_idx))
 }
 
 fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenStream, String> {
     let prefix_region = &tokens[..paren_idx];
+    // A `{ ... }` field group takes precedence over the comma check below: it
+    // names one specific mistake (alternatives where the form wants a single
+    // path), while a bare comma could equally mean a second struct entirely.
     if prefix_region
         .iter()
         .any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Brace))
     {
-        return Err(BRACE_BEFORE_NESTED_STAR_MESSAGE.to_string());
+        return Err(
+            "a `{ ... }` field group cannot appear before a nested `Type::*`; use a plain field path such as `Parent::child.(Child::*)`".to_string(),
+        );
+    }
+    // A second struct or field group before the nested form (`Other::x,
+    // Parent::child.(Child::*)`) would otherwise reach `parse_type_and_field_path`
+    // as one malformed type path and get the generic "expected a type path"
+    // message; the comma marks the real problem, the same way
+    // `parse_all_fields_at` tells the two apart for the bare form.
+    if contains_top_level_comma(prefix_region) {
+        return Err(CANNOT_COMBINE_NESTED_STAR_MESSAGE.to_string());
     }
 
     let connector = match paren_idx.checked_sub(1).map(|i| &tokens[i]) {
         Some(TokenTree::Punct(p)) if *p == '.' || *p == '~' => p.clone(),
-        _ => return Err(EXPECTED_CONNECTOR_BEFORE_NESTED_STAR_MESSAGE.to_string()),
+        _ => {
+            return Err(
+                "expected `.` or `~` immediately before a nested `Type::*`, e.g. `Parent::child.(Child::*)`".to_string(),
+            )
+        }
     };
     let head = &prefix_region[..prefix_region.len() - 1];
     let (parent_tokens, field_tokens) = parse_type_and_field_path(head)?;
     if field_tokens.is_empty() {
-        return Err(EMPTY_FIELD_BEFORE_NESTED_STAR_MESSAGE.to_string());
+        return Err(
+            "expected a field before the nested `Type::*`, e.g. `Parent::child.(Child::*)`"
+                .to_string(),
+        );
+    }
+    // A repeated or malformed connector (`P::o~.(C::*)`, `P::c..(C::*)`,
+    // `P::o~~(C::*)`) leaves a trailing `.`/`~` in the field path once the
+    // one connector directly before the parens is stripped off into `head`;
+    // left unchecked, that trailing punct becomes a dangling `.` in the
+    // generated check and fails with a confusing "unexpected token `;`".
+    if !matches!(field_tokens.last(), Some(TokenTree::Ident(_))) {
+        return Err(
+            "expected a field name immediately before the nested `Type::*`'s connector, e.g. `Parent::child.(Child::*)`".to_string(),
+        );
     }
 
     let paren_group = match &tokens[paren_idx] {
@@ -474,7 +495,7 @@ fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenS
         .iter()
         .any(|t| matches!(t, TokenTree::Group(_)))
     {
-        return Err(NESTED_PARENS_MESSAGE.to_string());
+        return Err("nesting a parenthesized group inside `Type::*` is not supported".to_string());
     }
     let (inner_type_tokens, star_span) = parse_bare_star_type(&inner_tokens)?;
 
@@ -484,6 +505,11 @@ fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenS
         [TokenTree::Punct(p), remainder @ ..] if *p == ';' => parse_all_fields_options(remainder)?,
         _ => return Err(CANNOT_COMBINE_NESTED_STAR_MESSAGE.to_string()),
     };
+    // `visibility`/`case` pick the inner type's names const exactly as the
+    // bare form does; `delim` additionally separates the prefix's own
+    // segments and joins the prefix to each name -- there being a prefix
+    // here is what the bare form has no `delim` option for.
+    const NESTED_STAR_OPTION_KEYS: &[&str] = &["visibility", "case", "delim"];
     if let Some((unknown, _)) = options
         .iter()
         .find(|(key, _)| !NESTED_STAR_OPTION_KEYS.contains(&key.as_str()))
@@ -504,13 +530,6 @@ fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenS
         .cloned()
         .unwrap_or_else(|| ".".to_string());
 
-    let field_check_tokens: TokenStream = field_tokens
-        .iter()
-        .map(|token| match token {
-            TokenTree::Punct(p) if *p == '~' => fill(".iter().next().unwrap().", p.span(), &[]),
-            token => token.clone().into(),
-        })
-        .collect();
     let inner_type_stream: TokenStream = inner_type_tokens.iter().cloned().collect();
     let parent_stream: TokenStream = parent_tokens.iter().cloned().collect();
 
@@ -520,42 +539,48 @@ fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenS
     // way the check's own literal tokens are spanned at the call site, like
     // every other check this macro emits, while `INNER`/`FIELD` keep the
     // user's own tokens so a mismatch is reported on them.
-    let check = if connector == '~' {
-        fill(
-            "let _: &INNER = t.FIELD.iter().next().unwrap();",
-            Span::call_site(),
-            &[
-                ("INNER", &inner_type_stream),
-                ("FIELD", &field_check_tokens),
-            ],
-        )
+    let check_template = if connector == '~' {
+        "let _: &INNER = t.FIELD.iter().next().unwrap();"
     } else {
-        fill(
-            "let _: &INNER = &t.FIELD;",
-            Span::call_site(),
-            &[
-                ("INNER", &inner_type_stream),
-                ("FIELD", &field_check_tokens),
-            ],
-        )
+        "let _: &INNER = &t.FIELD;"
     };
+    let check = fill(
+        check_template,
+        Span::call_site(),
+        &[
+            ("INNER", &inner_type_stream),
+            ("FIELD", &field_check_tokens(&field_tokens)),
+        ],
+    );
 
     let names_path = format!(
         "INNER::__STRUCT_PATH_{}_FIELDS{}",
         visibility_suffix, case_suffix
     );
     let names_tokens = fill(&names_path, star_span, &[("INNER", &inner_type_stream)]);
-    let prefix_tokens = string_literal_tokens(&prefix_string, star_span);
-    let delim_tokens = string_literal_tokens(&delim_string, star_span);
+    let prefix_tokens = quoted_string_tokens(&prefix_string, star_span)?;
+    let delim_tokens = quoted_string_tokens(&delim_string, star_span)?;
 
+    // `NAMES` is spliced twice here (the local const's own length and its
+    // value) and nowhere else in the block, so a names const that a
+    // downstream crate cannot see (an `ALL` array capped to `pub(crate)`)
+    // reports at most these two sites instead of once per call below.
+    // Binding the joined array itself to a `const`, rather than leaving it
+    // a plain expression, forces the whole join to run at compile time: a
+    // plain call, even to a `const fn` with only `const` inputs, is not
+    // guaranteed to be folded away, so without this binding release builds
+    // still call `core::str::from_utf8` at runtime for every `paths!` site.
     Ok(fill(
         "{
             const _: fn(&PARENT) = |t: &PARENT| { CHECK };
+            const __STRUCT_PATH_NAMES: [&str; NAMES.len()] = NAMES;
             const __STRUCT_PATH_LEN: usize =
-                INNER::__struct_path_joined_len(PREFIX, DELIM, &NAMES);
+                INNER::__struct_path_joined_len(PREFIX, DELIM, &__STRUCT_PATH_NAMES);
             const __STRUCT_PATH_BYTES: [u8; __STRUCT_PATH_LEN] =
-                INNER::__struct_path_joined_bytes::<__STRUCT_PATH_LEN>(PREFIX, DELIM, &NAMES);
-            INNER::__struct_path_joined(&__STRUCT_PATH_BYTES, PREFIX, DELIM, &NAMES)
+                INNER::__struct_path_joined_bytes::<__STRUCT_PATH_LEN>(PREFIX, DELIM, &__STRUCT_PATH_NAMES);
+            const __STRUCT_PATH_OUT: [&str; __STRUCT_PATH_NAMES.len()] =
+                INNER::__struct_path_joined(&__STRUCT_PATH_BYTES, PREFIX, DELIM, &__STRUCT_PATH_NAMES);
+            __STRUCT_PATH_OUT
         }",
         star_span,
         &[
@@ -633,12 +658,13 @@ fn parse_type_and_field_path(
     Ok((struct_name_tokens, field_tokens))
 }
 
-/// Parses the parenthesized group's content as a bare `Type::*` with
-/// nothing else inside -- no options, since those belong after the closing
-/// `)`, and no second group, already ruled out by the caller. Returns the
-/// inner type's tokens and the `*`'s span, used to anchor the generated
-/// call so a missing derive or a mismatched type is reported there.
-fn parse_bare_star_type(tokens: &[TokenTree]) -> Result<(Vec<TokenTree>, Span), String> {
+/// Splits `tokens` on its first `*`, checked to directly follow `Type::`,
+/// into the type path before it, the `*`'s own span, and whatever tokens
+/// remain after it. Shared by the nested form's inner type, which allows no
+/// `rest` at all, and the bare form, which allows `; options` or a second
+/// group there; each checks `rest` itself since the two forms disagree on
+/// what may follow.
+fn split_star_type(tokens: &[TokenTree]) -> Result<(&[TokenTree], Span, &[TokenTree]), String> {
     let star_pos = tokens
         .iter()
         .position(|t| matches!(t, TokenTree::Punct(p) if *p == '*'))
@@ -649,38 +675,66 @@ fn parse_bare_star_type(tokens: &[TokenTree]) -> Result<(Vec<TokenTree>, Span), 
     {
         return Err("`*` must directly follow `Type::`".to_string());
     }
-    let type_tokens = &tokens[..star_pos - 2];
-    if type_tokens.is_empty() || !is_bare_type_path(type_tokens) {
-        return Err(EXPECTED_TYPE_PATH_MESSAGE.to_string());
-    }
-    if star_pos + 1 != tokens.len() {
-        return Err(NOTHING_AFTER_NESTED_STAR_MESSAGE.to_string());
-    }
     let star_span = match &tokens[star_pos] {
         TokenTree::Punct(p) => p.span(),
         _ => unreachable!(),
     };
+    Ok((&tokens[..star_pos - 2], star_span, &tokens[star_pos + 1..]))
+}
+
+/// Whether `tokens` is exactly the single identifier `Self`, the one type
+/// path a nested `Type::*`'s inner type must reject: the join it drives is
+/// wrapped in a block-local `const`, and `Self` cannot be named from a
+/// nested item, only from the enclosing `impl` block itself (E0401).
+fn is_bare_self(tokens: &[TokenTree]) -> bool {
+    matches!(tokens, [TokenTree::Ident(id)] if id.to_string() == "Self")
+}
+
+/// Parses the parenthesized group's content as a bare `Type::*` with
+/// nothing else inside -- no options, since those belong after the closing
+/// `)`, and no second group, already ruled out by the caller. Returns the
+/// inner type's tokens and the `*`'s span, used to anchor the generated
+/// call so a missing derive or a mismatched type is reported there.
+fn parse_bare_star_type(tokens: &[TokenTree]) -> Result<(Vec<TokenTree>, Span), String> {
+    let (type_tokens, star_span, rest) = split_star_type(tokens)?;
+    if type_tokens.is_empty() || !is_bare_type_path(type_tokens) {
+        return Err(EXPECTED_TYPE_PATH_MESSAGE.to_string());
+    }
+    if is_bare_self(type_tokens) {
+        return Err(
+            "`Self` cannot be named inside a nested `Type::*`; name the type directly, e.g. `Node::next~(Node::*)`".to_string(),
+        );
+    }
+    if !rest.is_empty() {
+        return Err(NOTHING_AFTER_NESTED_STAR_MESSAGE.to_string());
+    }
     Ok((type_tokens.to_vec(), star_span))
 }
 
-/// Builds the tokens for a `&'static str` literal holding `value`, spanned
-/// at `span`. `Literal::string` escapes `value` itself, so a prefix or
-/// delimiter containing a quote or backslash still produces a literal the
-/// generated code can parse, unlike splicing `value` into a template string.
-fn string_literal_tokens(value: &str, span: Span) -> TokenStream {
-    let mut literal = proc_macro::Literal::string(value);
-    literal.set_span(span);
-    TokenStream::from(TokenTree::Literal(literal))
+/// Splices `value`, still carrying its source escape sequences the way
+/// `unquote_literal` returns them, directly between quotes and parses the
+/// result as a `&'static str` literal spanned at `span` -- the same
+/// splice-and-parse `paths_impl` uses for its own returned field path, so a
+/// delimiter or prefix containing `delim = "\t"` decodes to the same
+/// character both places instead of the doubled backslash that
+/// `Literal::string` (which escapes its input rather than reusing it as
+/// already-escaped source text) produced here before.
+fn quoted_string_tokens(value: &str, span: Span) -> Result<TokenStream, String> {
+    let text = format!("\"{}\"", value);
+    let tokens: TokenStream = text
+        .parse()
+        .map_err(|_| format!("Generated code failed to parse: {}", text))?;
+    Ok(tokens
+        .into_iter()
+        .map(|mut token| {
+            token.set_span(span);
+            token
+        })
+        .collect())
 }
 
-fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStream, String> {
-    if star_pos < 2
-        || !matches!(&tokens[star_pos - 1], TokenTree::Punct(p) if *p == ':')
-        || !matches!(&tokens[star_pos - 2], TokenTree::Punct(p) if *p == ':')
-    {
-        return Err("`*` must directly follow `Type::`".to_string());
-    }
-    let type_tokens = &tokens[..star_pos - 2];
+fn parse_all_fields_at(tokens: &[TokenTree]) -> Result<TokenStream, String> {
+    let (type_tokens, star_span, rest) = split_star_type(tokens)?;
     if type_tokens.is_empty() {
         return Err("Unexpected `*` with an empty type!".to_string());
     }
@@ -697,12 +751,7 @@ fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStr
             EXPECTED_TYPE_PATH_MESSAGE.to_string()
         });
     }
-    let star_span = match &tokens[star_pos] {
-        TokenTree::Punct(p) => p.span(),
-        _ => unreachable!(),
-    };
 
-    let rest = &tokens[star_pos + 1..];
     let options = match rest {
         [] => Vec::new(),
         [TokenTree::Punct(p), remainder @ ..] if *p == ';' => parse_all_fields_options(remainder)?,
@@ -1060,23 +1109,34 @@ fn generate_checks_code_for(found_structs: &FoundStructs) -> TokenStream {
     for (struct_name_tokens, struct_fields) in found_structs {
         let struct_name: TokenStream = struct_name_tokens.iter().cloned().collect();
         for field_tokens in struct_fields {
-            let field_path: TokenStream = field_tokens
-                .iter()
-                .map(|token| match token {
-                    TokenTree::Punct(punct) if *punct == '~' => {
-                        fill(".iter().next().unwrap().", punct.span(), &[])
-                    }
-                    token => token.clone().into(),
-                })
-                .collect();
             all_check_functions.extend(fill(
                 "const _: fn(&STRUCT) = |t: &STRUCT| { let _ = &t.FIELD; };",
                 Span::call_site(),
-                &[("STRUCT", &struct_name), ("FIELD", &field_path)],
+                &[
+                    ("STRUCT", &struct_name),
+                    ("FIELD", &field_check_tokens(field_tokens)),
+                ],
             ));
         }
     }
     all_check_functions
+}
+
+/// Maps a field path's tokens to themselves, except a `~` step, which
+/// becomes `.iter().next().unwrap().` spanned at that `~` so a stepped-into
+/// type without `iter()` is blamed on the `~` rather than on the check as a
+/// whole. Shared by every check this macro emits, flat or nested, so they
+/// can never disagree on what `~` means.
+fn field_check_tokens(field_tokens: &[TokenTree]) -> TokenStream {
+    field_tokens
+        .iter()
+        .map(|token| match token {
+            TokenTree::Punct(punct) if *punct == '~' => {
+                fill(".iter().next().unwrap().", punct.span(), &[])
+            }
+            token => token.clone().into(),
+        })
+        .collect()
 }
 
 /// Parses `template` into tokens spanned at `span`, replacing each ident
@@ -1291,13 +1351,13 @@ fn derive_struct_path_impl(input: TokenStream) -> Result<TokenStream, TokenStrea
     // The three helpers below take a names array as a runtime-shaped
     // parameter rather than reading `Self::__STRUCT_PATH_*_FIELDS`
     // themselves, so paths!'s nested `Type::*` form can pass either the PUB
-    // or the ALL array (in any case) through the same three functions. That
-    // means their own visibility has to cover the more permissive of the
-    // two families -- the struct's own tokens, same as `__STRUCT_PATH_PUB_
-    // FIELDS*` above -- rather than the `pub(crate)` cap applied to
-    // `__STRUCT_PATH_ALL_FIELDS*`; capping them the same way would make a
-    // downstream crate able to name the ALL array's helpers-required call
-    // but not call them.
+    // or the ALL array through the same three functions. Their own
+    // visibility therefore stays at the struct's own tokens, the same as
+    // `__STRUCT_PATH_PUB_FIELDS*` above, rather than the `pub(crate)` cap
+    // applied to `__STRUCT_PATH_ALL_FIELDS*`: every `paths!` call that uses
+    // the PUB array, including from a downstream crate, calls these
+    // helpers too, so capping them the same way as the ALL array would
+    // break that ordinary case, not just a downstream crate's use of ALL.
     let generated = fill(
         "impl<GENERICS_IMPL> NAME<GENERICS_TYPE> WHERE_CLAUSE {
             #[doc(hidden)]
@@ -1314,6 +1374,7 @@ fn derive_struct_path_impl(input: TokenStream) -> Result<TokenStream, TokenStrea
             ALL_VIS const __STRUCT_PATH_ALL_FIELDS_PASCAL: [&'static str; N_ALL] = ALL_FIELDS_PASCAL;
 
             #[doc(hidden)]
+            #[must_use]
             VIS const fn __struct_path_joined_len(prefix: &str, delim: &str, names: &[&str]) -> usize {
                 let mut total = 0;
                 let mut i = 0;
@@ -1325,6 +1386,7 @@ fn derive_struct_path_impl(input: TokenStream) -> Result<TokenStream, TokenStrea
             }
 
             #[doc(hidden)]
+            #[must_use]
             VIS const fn __struct_path_joined_bytes<const TOTAL: usize>(
                 prefix: &str,
                 delim: &str,
@@ -1351,6 +1413,7 @@ fn derive_struct_path_impl(input: TokenStream) -> Result<TokenStream, TokenStrea
             }
 
             #[doc(hidden)]
+            #[must_use]
             VIS const fn __struct_path_joined<const N: usize, const TOTAL: usize>(
                 bytes: &'static [u8; TOTAL],
                 prefix: &str,

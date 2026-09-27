@@ -1,0 +1,7 @@
+error: `Self` cannot be named inside a nested `Type::*`; name the type directly, e.g. `Node::next~(Node::*)`
+  --> tests/ui/nested_star_self_type.rs:11:9
+   |
+11 |         paths!(Node::next~(Self::*))
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

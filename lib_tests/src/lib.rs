@@ -175,6 +175,56 @@ mod tests {
         assert_eq!(test_multiple_types, ["opt_value_child.child_value_str"]);
     }
 
+    /// Locks in the plain (non-`*`) grammar's own edge cases against a
+    /// parity run against master (`1d104cd`) on the same inputs: a `(...)`
+    /// field group, a `[...]` field group, a `(...)` group combined with a
+    /// second struct, and the option grammar's escaped delimiters, char
+    /// delimiter, unquoted option value and a bare trailing key. `paths!`'s
+    /// nested `Type::*` routing must never divert any of these into its own
+    /// parser, since none of them contain a `*`.
+    ///
+    /// `#[rustfmt::skip]`: rustfmt formats a macro call's arguments as if
+    /// they were a Rust expression when it can, and treats `Type::(...)`
+    /// as a redundant turbofish colon before a call, deleting the `::` this
+    /// macro's grammar requires there.
+    #[test]
+    #[rustfmt::skip]
+    fn struct_paths_master_parity() {
+        let test_paren_group = paths!(TestStructParent::(value_str, value_num));
+        assert_eq!(test_paren_group, ["value_str", "value_num"]);
+
+        let test_bracket_group = paths!(TestStructParent::[value_str, value_num]);
+        assert_eq!(test_bracket_group, ["value_str", "value_num"]);
+
+        let test_paren_group_plus_second_struct = paths!(
+            TestStructParent::(value_str, value_num),
+            TestStructChild::child_value_str
+        );
+        assert_eq!(
+            test_paren_group_plus_second_struct,
+            ["value_str", "value_num", "child_value_str"]
+        );
+
+        let test_delim_tab = path!(TestStructParent::value_child.child_value_str; delim = "\t");
+        assert_eq!(test_delim_tab, "value_child\tchild_value_str");
+
+        let test_delim_backslash =
+            path!(TestStructParent::value_child.child_value_str; delim = "\\");
+        assert_eq!(test_delim_backslash, "value_child\\child_value_str");
+
+        let test_delim_quote = path!(TestStructParent::value_child.child_value_str; delim = "\"");
+        assert_eq!(test_delim_quote, "value_child\"child_value_str");
+
+        let test_delim_char = path!(TestStructParent::value_child.child_value_str; delim = '/');
+        assert_eq!(test_delim_char, "value_child/child_value_str");
+
+        let test_case_unquoted = path!(TestStructParent::value_str; case=camel);
+        assert_eq!(test_case_unquoted, "valueStr");
+
+        let test_bare_key_ignored = path!(TestStructParent::value_str; delim);
+        assert_eq!(test_bare_key_ignored, "value_str");
+    }
+
     #[test]
     fn struct_paths_all_fields() {
         let test_all = paths!(TestStructAllFields::*);
@@ -305,6 +355,19 @@ mod tests {
         let test_pascal = paths!(StarParent::child.(StarChild::*); case = "pascal");
         assert_eq!(test_pascal, ["Child.A", "Child.B"]);
 
+        // An escaped delimiter must decode to the same character through
+        // the nested form as it already does through the flat form: a
+        // literal `\t` in the source, not a backslash and a `t`.
+        let test_delim_tab = paths!(StarParent::child.(StarChild::*); delim = "\t");
+        assert_eq!(
+            test_delim_tab,
+            [
+                path!(StarParent::child.a; delim = "\t"),
+                path!(StarParent::child.b; delim = "\t"),
+            ]
+        );
+        assert_eq!(test_delim_tab, ["child\ta", "child\tb"]);
+
         let test_default_visibility = paths!(StarParent::mixed_child.(StarChildMixedVisibility::*));
         assert_eq!(test_default_visibility, ["mixed_child.a"]);
 
@@ -315,6 +378,13 @@ mod tests {
         let test_module_path =
             paths!(StarParent::mod_child.(crate::tests::star_nested::StarNestedChild::*));
         assert_eq!(test_module_path, ["mod_child.y"]);
+
+        // A trailing `;` with no option pairs after it is accepted the same
+        // way for the nested form as it already is for the bare form.
+        let test_empty_options_bare = paths!(StarChild::*;);
+        assert_eq!(test_empty_options_bare, ["a", "b"]);
+        let test_empty_options_nested = paths!(StarParent::child.(StarChild::*););
+        assert_eq!(test_empty_options_nested, ["child.a", "child.b"]);
 
         const CONST_NAMES: [&str; 2] = paths!(StarParent::child.(StarChild::*));
         assert_eq!(CONST_NAMES, ["child.a", "child.b"]);
