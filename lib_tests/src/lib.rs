@@ -45,6 +45,53 @@ mod tests {
         pub value_str: &'a str,
     }
 
+    #[derive(StructPath)]
+    pub struct TestStructWithWhereClause<'a>
+    where
+        'a: 'static,
+    {
+        pub x: &'a u8,
+    }
+
+    #[derive(StructPath)]
+    pub struct TestStructWhereClauseWithParens<'a>
+    where
+        (): Sized,
+        'a: 'static,
+    {
+        pub x: &'a u8,
+    }
+
+    #[derive(StructPath)]
+    pub struct TestStructWhereClauseWithRefParens<'a>
+    where
+        &'a (i32, i32): 'a,
+    {
+        pub x: &'a u8,
+    }
+
+    #[derive(StructPath)]
+    pub struct TestStructFnPointerField {
+        pub before: fn(u8) -> u8,
+        pub middle: u32,
+        pub after: u32,
+    }
+
+    #[derive(StructPath)]
+    pub struct TestStructBoxedDynFnField {
+        pub callback: Box<dyn Fn(u8) -> u8>,
+        pub after: u32,
+    }
+
+    macro_rules! mk_struct_from_vis_fragments {
+        ($n:ident { $($fv:vis $f:ident : $t:ty),* }) => {
+            #[derive(StructPath)]
+            pub struct $n { $($fv $f: $t),* }
+        };
+    }
+
+    mk_struct_from_vis_fragments!(TestStructFromVisFragments { pub visible: u8, hidden: u8 });
+
     pub mod nested {
         use struct_path::StructPath;
 
@@ -133,5 +180,35 @@ mod tests {
 
         let test_nested_path = paths!(crate::tests::nested::NestedStruct::*);
         assert_eq!(test_nested_path, ["value_str"]);
+    }
+
+    #[test]
+    fn struct_paths_all_fields_with_where_clauses() {
+        let test_where = paths!(TestStructWithWhereClause::*);
+        assert_eq!(test_where, ["x"]);
+
+        let test_where_with_parens = paths!(TestStructWhereClauseWithParens::*);
+        assert_eq!(test_where_with_parens, ["x"]);
+
+        let test_where_with_ref_parens = paths!(TestStructWhereClauseWithRefParens::*);
+        assert_eq!(test_where_with_ref_parens, ["x"]);
+    }
+
+    #[test]
+    fn struct_paths_all_fields_past_a_return_arrow() {
+        let test_fn_pointer = paths!(TestStructFnPointerField::*);
+        assert_eq!(test_fn_pointer, ["before", "middle", "after"]);
+
+        let test_boxed_dyn_fn = paths!(TestStructBoxedDynFnField::*);
+        assert_eq!(test_boxed_dyn_fn, ["callback", "after"]);
+    }
+
+    #[test]
+    fn struct_paths_all_fields_from_macro_rules_vis_fragments() {
+        let test_pub_only = paths!(TestStructFromVisFragments::*);
+        assert_eq!(test_pub_only, ["visible"]);
+
+        let test_all = paths!(TestStructFromVisFragments::*; visibility = "all");
+        assert_eq!(test_all, ["visible", "hidden"]);
     }
 }
