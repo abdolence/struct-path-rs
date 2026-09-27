@@ -1,0 +1,5 @@
+error[E0599]: no method named `iter` found for type `u64` in the current scope
+ --> tests/ui/tilde_without_iter.rs:8:46
+  |
+8 |     let _ = path!(TestStructParent::value_num~child_value_str);
+  |                                              ^ method not found in `u64`

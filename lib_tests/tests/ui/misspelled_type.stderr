@@ -1,0 +1,14 @@
+error[E0425]: cannot find type `TestStructParentTypo` in this scope
+ --> tests/ui/misspelled_type.rs:8:19
+  |
+3 | pub struct TestStructParent {
+  | --------------------------- similarly named struct `TestStructParent` defined here
+...
+8 |     let _ = path!(TestStructParentTypo::value_str);
+  |                   ^^^^^^^^^^^^^^^^^^^^
+  |
+help: a struct with a similar name exists
+  |
+8 -     let _ = path!(TestStructParentTypo::value_str);
+8 +     let _ = path!(TestStructParent::value_str);
+  |
