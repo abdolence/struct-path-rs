@@ -104,7 +104,7 @@ let nested_opt: [&str; 2] = paths!(TestStructParent::opt_value_child~(TestStruct
 
 ```
 
-Nesting `Type::*` under a field path takes the same requirement: name the inner type again inside the parens, and derive it too.
+The inner type named inside the parens needs `#[derive(StructPath)]` too.
 
 ### Lint gates on the derive
 
