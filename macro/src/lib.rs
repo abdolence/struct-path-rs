@@ -9,6 +9,7 @@
 //! - Multiple fields/arrays support
 //! - Optional camelCase and PascalCase conversion support;
 //! - Optional delimiter parameter;
+//! - `#[derive(StructPath)]` to return all of a struct's declared fields via `Type::*`, without listing them by hand;
 //!
 //! Example:
 //!
@@ -48,6 +49,19 @@
 //!// returns ["value_str", "value_num"]
 //!let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
 //!
+//! #[derive(StructPath)]
+//! pub struct TestStructWithPrivate {
+//!     pub value_str: String,
+//!     value_internal: String,
+//! }
+//!
+//!// `Type::*` needs `#[derive(StructPath)]` on `Type`; returns ["value_str"],
+//!// only the field declared with plain `pub`
+//!let pub_only: [&str; 1] = paths!(TestStructWithPrivate::*);
+//!
+//!// `visibility="all"` returns every declared field instead
+//!let all_fields: [&str; 2] = paths!(TestStructWithPrivate::*; visibility="all");
+//!
 //! }
 //!
 //! ```
@@ -66,6 +80,21 @@ fn compile_error_for(message: String) -> TokenStream {
         .expect("a compile_error! invocation with an escaped string literal always parses")
 }
 
+/// Like `compile_error_for`, but for the derive parser, which walks its own
+/// item tokens rather than building a `Result<_, String>` message: the error
+/// is spanned on the offending token so it is reported there and not at the
+/// derive's call site.
+fn compile_error_at(message: &str, span: Span) -> TokenStream {
+    let mut literal = proc_macro::Literal::string(message);
+    literal.set_span(span);
+    let message_tokens = TokenStream::from(TokenTree::Literal(literal));
+    fill(
+        "compile_error!(MESSAGE);",
+        Span::call_site(),
+        &[("MESSAGE", &message_tokens)],
+    )
+}
+
 /// The type path and field paths found for one `Type::field[, field...]`
 /// group, kept as the user's own tokens so the generated check reports a
 /// type error on the exact token that is wrong. A field path holds its
@@ -82,6 +111,10 @@ pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
 }
 
 fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
+    if let Some(result) = try_parse_all_fields(&struct_path_stream) {
+        return result;
+    }
+
     let mut current_struct_name_tokens: Vec<TokenTree> = Vec::new();
     let mut current_struct_fields: Vec<Vec<TokenTree>> = Vec::with_capacity(16);
 
@@ -315,6 +348,116 @@ fn parse_multiple_fields(
     Ok(())
 }
 
+/// Recognizes the one shape `*` is allowed in: `Type::*` (optionally
+/// `crate::mod::Type::*`), followed by nothing or `; options`. Returns
+/// `None` when the input has no top-level `*` at all, so the caller falls
+/// through to the ordinary field-list parser unchanged. Any other
+/// placement of `*` (mixed with another struct or field group) is an error
+/// here rather than a fall-through, because the combined array length
+/// would then be unknown to the macro.
+fn try_parse_all_fields(struct_path_stream: &TokenStream) -> Option<Result<TokenStream, String>> {
+    let tokens: Vec<TokenTree> = struct_path_stream.clone().into_iter().collect();
+    let star_pos = tokens
+        .iter()
+        .position(|t| matches!(t, TokenTree::Punct(p) if *p == '*'))?;
+    Some(parse_all_fields_at(&tokens, star_pos))
+}
+
+fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStream, String> {
+    if star_pos < 2
+        || !matches!(&tokens[star_pos - 1], TokenTree::Punct(p) if *p == ':')
+        || !matches!(&tokens[star_pos - 2], TokenTree::Punct(p) if *p == ':')
+    {
+        return Err("`*` must directly follow `Type::`".to_string());
+    }
+    let type_tokens = &tokens[..star_pos - 2];
+    if type_tokens.is_empty() {
+        return Err("Unexpected `*` with an empty type!".to_string());
+    }
+    let star_span = match &tokens[star_pos] {
+        TokenTree::Punct(p) => p.span(),
+        _ => unreachable!(),
+    };
+
+    let rest = &tokens[star_pos + 1..];
+    let options = match rest {
+        [] => HashMap::new(),
+        [TokenTree::Punct(p), remainder @ ..] if *p == ';' => parse_options_only(remainder)?,
+        _ => {
+            return Err(
+                "`Type::*` cannot be combined with another struct or field group: its length is unknown to the macro"
+                    .to_string(),
+            )
+        }
+    };
+
+    let visibility_suffix = match options.get("visibility").map(String::as_str) {
+        None | Some("pub") => "PUB",
+        Some("all") => "ALL",
+        Some(other) => return Err(format!("Unknown visibility is specified: {}", other)),
+    };
+    let case_suffix = match options.get("case").map(String::as_str) {
+        None => "",
+        Some("camel") => "_CAMEL",
+        Some("pascal") => "_PASCAL",
+        Some(other) => return Err(format!("Unknown case is specified: {}", other)),
+    };
+
+    let const_path = format!(
+        "TYPE::__STRUCT_PATH_{}_FIELDS{}",
+        visibility_suffix, case_suffix
+    );
+    let type_stream: TokenStream = type_tokens.iter().cloned().collect();
+    Ok(fill(&const_path, star_span, &[("TYPE", &type_stream)]))
+}
+
+/// Parses the `key = value, key = value` list after `Type::*;`, the same
+/// grammar the main loop accepts after a field list's `;`, but standalone
+/// since no field tokens ever follow the `;` in this shape.
+fn parse_options_only(tokens: &[TokenTree]) -> Result<HashMap<String, String>, String> {
+    let mut options: HashMap<String, String> = HashMap::new();
+    let mut current_option_name: Option<String> = None;
+    let mut expect_option_value = false;
+    for token_tree in tokens {
+        match token_tree {
+            TokenTree::Ident(id) if !expect_option_value => {
+                current_option_name = Some(id.to_string());
+            }
+            TokenTree::Ident(id) if expect_option_value => {
+                expect_option_value = false;
+                match current_option_name.take() {
+                    Some(name) => {
+                        options.insert(name, id.to_string());
+                    }
+                    None => return Err("Wrong options format".to_string()),
+                }
+            }
+            TokenTree::Literal(lit) if expect_option_value => {
+                expect_option_value = false;
+                match current_option_name.take() {
+                    Some(name) => {
+                        options.insert(name, unquote_literal(lit)?);
+                    }
+                    None => return Err("Wrong options format".to_string()),
+                }
+            }
+            TokenTree::Punct(p) if *p == '=' => {
+                expect_option_value = true;
+            }
+            TokenTree::Punct(p) if *p == ',' => {
+                expect_option_value = false;
+            }
+            other => {
+                return Err(format!(
+                    "Unexpected input for struct path parameters: {:?}",
+                    other
+                ))
+            }
+        }
+    }
+    Ok(options)
+}
+
 #[proc_macro]
 pub fn path(struct_path_stream: TokenStream) -> TokenStream {
     match path_impl(struct_path_stream) {
@@ -324,6 +467,18 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
 }
 
 fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
+    // `Type::*` (all declared fields) has an array result, so only `paths!`
+    // can return it; `path!` always returns a single string.
+    let has_star = struct_path_stream
+        .clone()
+        .into_iter()
+        .any(|t| matches!(t, TokenTree::Punct(p) if p == '*'));
+    if has_star {
+        return Err(
+            "`*` for all declared fields is only supported by paths!, not path!".to_string(),
+        );
+    }
+
     let mut current_struct_name_tokens: Vec<TokenTree> = Vec::new();
 
     let mut opened_struct = false;
@@ -561,6 +716,18 @@ fn unquote_literal(lit: &proc_macro::Literal) -> Result<String, String> {
     }
 }
 
+/// The case conversion shared by `path!`/`paths!`'s `case = "..."` option
+/// and `#[derive(StructPath)]`'s `_CAMEL`/`_PASCAL` field-name constants, so
+/// the two can never disagree on what "camel" or "pascal" means for a
+/// snake_case field name.
+fn convert_case_by_name(field_name: &str, case_name: &str) -> Result<String, String> {
+    match case_name {
+        "camel" => Ok(field_name.from_case(Case::Snake).to_case(Case::Camel)),
+        "pascal" => Ok(field_name.from_case(Case::Snake).to_case(Case::Pascal)),
+        another => Err(format!("Unknown case is specified: {}", another)),
+    }
+}
+
 fn apply_options(options: &HashMap<String, String>, field_path: String) -> Result<String, String> {
     let delim = options
         .get("delim")
@@ -570,17 +737,406 @@ fn apply_options(options: &HashMap<String, String>, field_path: String) -> Resul
     let case = options.get("case");
     let segments = field_path
         .split('.')
-        .map(|field_name| {
-            if let Some(case_value) = case {
-                match case_value.as_str() {
-                    "camel" => Ok(field_name.from_case(Case::Snake).to_case(Case::Camel)),
-                    "pascal" => Ok(field_name.from_case(Case::Snake).to_case(Case::Pascal)),
-                    another => Err(format!("Unknown case is specified: {}", another)),
-                }
-            } else {
-                Ok(field_name.to_string())
-            }
+        .map(|field_name| match case {
+            Some(case_value) => convert_case_by_name(field_name, case_value),
+            None => Ok(field_name.to_string()),
         })
         .collect::<Result<Vec<String>, String>>()?;
     Ok(segments.join(delim))
+}
+
+/// `#[derive(StructPath)]` records a struct's declared field names as
+/// `#[doc(hidden)]` associated consts, so `paths!(Type::*)` can return them
+/// without the caller listing every field by hand. Supports only a struct
+/// with named fields and, at most, lifetime generic parameters; anything
+/// else is a `compile_error!` on the offending item, spanned at the
+/// specific token that disqualifies it.
+#[proc_macro_derive(StructPath)]
+pub fn derive_struct_path(input: TokenStream) -> TokenStream {
+    match derive_struct_path_impl(input) {
+        Ok(stream) => stream,
+        Err(error_stream) => error_stream,
+    }
+}
+
+/// One field found in a derived struct's body: its declared name, with any
+/// `r#` prefix stripped since the generated string is a JSON-path-style
+/// segment rather than a Rust identifier, and whether it was declared with
+/// plain `pub` — `pub(crate)`, `pub(super)`, `pub(in ..)` and private
+/// fields are all "not plain pub".
+struct DerivedField {
+    name: String,
+    is_plain_pub: bool,
+}
+
+fn derive_struct_path_impl(input: TokenStream) -> Result<TokenStream, TokenStream> {
+    let tokens: Vec<TokenTree> = input.into_iter().collect();
+    let mut pos = 0;
+
+    skip_attributes(&tokens, &mut pos);
+
+    let visibility_start = pos;
+    skip_visibility(&tokens, &mut pos);
+    let visibility_tokens: TokenStream = tokens[visibility_start..pos].iter().cloned().collect();
+
+    let (keyword, keyword_span) = match tokens.get(pos) {
+        Some(TokenTree::Ident(id)) => (id.to_string(), id.span()),
+        _ => {
+            return Err(compile_error_at(
+                "StructPath: unable to parse the derived item",
+                Span::call_site(),
+            ))
+        }
+    };
+    if keyword != "struct" {
+        return Err(compile_error_at(
+            &format!(
+                "StructPath supports structs with named fields only, not {}s",
+                keyword
+            ),
+            keyword_span,
+        ));
+    }
+    pos += 1;
+
+    let name_ident = match tokens.get(pos) {
+        Some(TokenTree::Ident(id)) => id.clone(),
+        _ => {
+            return Err(compile_error_at(
+                "StructPath: expected a struct name",
+                keyword_span,
+            ))
+        }
+    };
+    let name_span = name_ident.span();
+    pos += 1;
+
+    let (generics_impl, generics_type) = parse_lifetime_generics(&tokens, &mut pos)?;
+    let fields_group = find_fields_group(&tokens[pos..])?;
+    let fields = parse_derived_fields(fields_group.stream())?;
+
+    let pub_names: Vec<String> = fields
+        .iter()
+        .filter(|f| f.is_plain_pub)
+        .map(|f| f.name.clone())
+        .collect();
+    let all_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+
+    let to_camel = |names: &[String]| -> Vec<String> {
+        names
+            .iter()
+            .map(|n| convert_case_by_name(n, "camel").expect("\"camel\" is always a known case"))
+            .collect()
+    };
+    let to_pascal = |names: &[String]| -> Vec<String> {
+        names
+            .iter()
+            .map(|n| convert_case_by_name(n, "pascal").expect("\"pascal\" is always a known case"))
+            .collect()
+    };
+
+    let name_tokens = TokenStream::from(TokenTree::Ident(name_ident));
+    let pub_array = array_literal_tokens(&pub_names);
+    let pub_camel_array = array_literal_tokens(&to_camel(&pub_names));
+    let pub_pascal_array = array_literal_tokens(&to_pascal(&pub_names));
+    let all_array = array_literal_tokens(&all_names);
+    let all_camel_array = array_literal_tokens(&to_camel(&all_names));
+    let all_pascal_array = array_literal_tokens(&to_pascal(&all_names));
+    let n_pub: TokenStream = pub_names
+        .len()
+        .to_string()
+        .parse()
+        .expect("a field count always parses as a literal");
+    let n_all: TokenStream = all_names
+        .len()
+        .to_string()
+        .parse()
+        .expect("a field count always parses as a literal");
+
+    let generated = fill(
+        "impl<GENERICS_IMPL> NAME<GENERICS_TYPE> {
+            #[doc(hidden)]
+            VIS const __STRUCT_PATH_PUB_FIELDS: [&'static str; N_PUB] = PUB_FIELDS;
+            #[doc(hidden)]
+            VIS const __STRUCT_PATH_PUB_FIELDS_CAMEL: [&'static str; N_PUB] = PUB_FIELDS_CAMEL;
+            #[doc(hidden)]
+            VIS const __STRUCT_PATH_PUB_FIELDS_PASCAL: [&'static str; N_PUB] = PUB_FIELDS_PASCAL;
+            #[doc(hidden)]
+            VIS const __STRUCT_PATH_ALL_FIELDS: [&'static str; N_ALL] = ALL_FIELDS;
+            #[doc(hidden)]
+            VIS const __STRUCT_PATH_ALL_FIELDS_CAMEL: [&'static str; N_ALL] = ALL_FIELDS_CAMEL;
+            #[doc(hidden)]
+            VIS const __STRUCT_PATH_ALL_FIELDS_PASCAL: [&'static str; N_ALL] = ALL_FIELDS_PASCAL;
+        }",
+        name_span,
+        &[
+            ("GENERICS_IMPL", &generics_impl),
+            ("GENERICS_TYPE", &generics_type),
+            ("NAME", &name_tokens),
+            ("VIS", &visibility_tokens),
+            ("N_PUB", &n_pub),
+            ("N_ALL", &n_all),
+            ("PUB_FIELDS", &pub_array),
+            ("PUB_FIELDS_CAMEL", &pub_camel_array),
+            ("PUB_FIELDS_PASCAL", &pub_pascal_array),
+            ("ALL_FIELDS", &all_array),
+            ("ALL_FIELDS_CAMEL", &all_camel_array),
+            ("ALL_FIELDS_PASCAL", &all_pascal_array),
+        ],
+    );
+    Ok(generated)
+}
+
+/// Skips a run of `#[...]` attributes (including `#[doc = "..."]` doc
+/// comments), advancing `pos` past each one.
+fn skip_attributes(tokens: &[TokenTree], pos: &mut usize) {
+    while matches!(tokens.get(*pos), Some(TokenTree::Punct(p)) if *p == '#') {
+        *pos += 1;
+        if matches!(tokens.get(*pos), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket)
+        {
+            *pos += 1;
+        }
+    }
+}
+
+/// Advances `pos` past an item's visibility (`pub`, `pub(crate)`,
+/// `pub(super)`, `pub(in ..)`, or nothing for private), without reporting
+/// which kind it was; callers that need to know use
+/// `parse_field_visibility` instead.
+fn skip_visibility(tokens: &[TokenTree], pos: &mut usize) {
+    if matches!(tokens.get(*pos), Some(TokenTree::Ident(id)) if id.to_string() == "pub") {
+        *pos += 1;
+        if matches!(tokens.get(*pos), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis)
+        {
+            *pos += 1;
+        }
+    }
+}
+
+/// Advances `pos` past a field's visibility and reports whether it was
+/// plain `pub`: `pub(crate)`, `pub(super)`, `pub(in ..)` and private fields
+/// all return `false`, since none of them are visible outside the crate
+/// the way plain `pub` is.
+fn parse_field_visibility(tokens: &[TokenTree], pos: &mut usize) -> bool {
+    if matches!(tokens.get(*pos), Some(TokenTree::Ident(id)) if id.to_string() == "pub") {
+        *pos += 1;
+        if matches!(tokens.get(*pos), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis)
+        {
+            *pos += 1;
+            return false;
+        }
+        return true;
+    }
+    false
+}
+
+/// Splits `tokens` on commas that are not inside `<...>`, so a field's
+/// type, e.g. `HashMap<String, u64>`, keeps its own comma out of the split.
+/// Angle brackets are plain `Punct` tokens here, not a delimited `Group`, so
+/// depth has to be tracked explicitly. A trailing comma produces no empty
+/// trailing segment. Shared by generic-parameter and struct-field splitting.
+fn split_top_level_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
+    let mut segments = Vec::new();
+    let mut current = Vec::new();
+    let mut depth: i32 = 0;
+    for token in tokens {
+        match token {
+            TokenTree::Punct(p) if *p == '<' => {
+                depth += 1;
+                current.push(token.clone());
+            }
+            TokenTree::Punct(p) if *p == '>' => {
+                depth -= 1;
+                current.push(token.clone());
+            }
+            TokenTree::Punct(p) if *p == ',' && depth == 0 => {
+                segments.push(std::mem::take(&mut current));
+            }
+            other => current.push(other.clone()),
+        }
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    segments
+}
+
+/// Recognizes a single generic parameter as a lifetime, optionally with
+/// lifetime bounds (`'a` or `'a: 'b + 'c`), and returns just the bare `'a`
+/// tokens for use in the derived impl's `Name<'a>`. Returns `None` for a
+/// type or const parameter, which `StructPath` does not support.
+fn lifetime_param_name(segment: &[TokenTree]) -> Option<Vec<TokenTree>> {
+    if segment.len() < 2 {
+        return None;
+    }
+    if !matches!(&segment[0], TokenTree::Punct(p) if *p == '\'') {
+        return None;
+    }
+    if !matches!(&segment[1], TokenTree::Ident(_)) {
+        return None;
+    }
+    let bare = segment[0..2].to_vec();
+    if segment.len() == 2 {
+        return Some(bare);
+    }
+    if !matches!(&segment[2], TokenTree::Punct(p) if *p == ':') {
+        return None;
+    }
+    let mut i = 3;
+    loop {
+        if i + 1 >= segment.len() {
+            return None;
+        }
+        let is_lifetime = matches!(&segment[i], TokenTree::Punct(p) if *p == '\'')
+            && matches!(&segment[i + 1], TokenTree::Ident(_));
+        if !is_lifetime {
+            return None;
+        }
+        i += 2;
+        if i == segment.len() {
+            break;
+        }
+        if !matches!(&segment[i], TokenTree::Punct(p) if *p == '+') {
+            return None;
+        }
+        i += 1;
+    }
+    Some(bare)
+}
+
+/// Parses the optional `<...>` generic parameter list starting at `*pos`,
+/// advancing `pos` past it, and returns the tokens for `impl<GENERICS_IMPL>`
+/// and the bare lifetime names for `Name<GENERICS_TYPE>`. Both are empty
+/// when the struct has no generics.
+fn parse_lifetime_generics(
+    tokens: &[TokenTree],
+    pos: &mut usize,
+) -> Result<(TokenStream, TokenStream), TokenStream> {
+    if !matches!(tokens.get(*pos), Some(TokenTree::Punct(p)) if *p == '<') {
+        return Ok((TokenStream::new(), TokenStream::new()));
+    }
+    let open_span = match &tokens[*pos] {
+        TokenTree::Punct(p) => p.span(),
+        _ => unreachable!(),
+    };
+    *pos += 1;
+    let start = *pos;
+    let mut depth = 1;
+    while depth > 0 {
+        match tokens.get(*pos) {
+            Some(TokenTree::Punct(p)) if *p == '<' => depth += 1,
+            Some(TokenTree::Punct(p)) if *p == '>' => depth -= 1,
+            Some(_) => {}
+            None => {
+                return Err(compile_error_at(
+                    "StructPath: unterminated generic parameter list",
+                    open_span,
+                ))
+            }
+        }
+        *pos += 1;
+    }
+    let generics_tokens = &tokens[start..*pos - 1];
+
+    let mut bare_lifetimes: Vec<TokenTree> = Vec::new();
+    for (i, segment) in split_top_level_commas(generics_tokens)
+        .into_iter()
+        .enumerate()
+    {
+        if i > 0 {
+            bare_lifetimes.extend(",".parse::<TokenStream>().expect("`,` always parses"));
+        }
+        match lifetime_param_name(&segment) {
+            Some(bare) => bare_lifetimes.extend(bare),
+            None => {
+                let span = segment.first().map(|t| t.span()).unwrap_or(open_span);
+                return Err(compile_error_at(
+                    "StructPath only supports lifetime generic parameters",
+                    span,
+                ));
+            }
+        }
+    }
+
+    let generics_impl: TokenStream = generics_tokens.iter().cloned().collect();
+    let generics_type: TokenStream = bare_lifetimes.into_iter().collect();
+    Ok((generics_impl, generics_type))
+}
+
+/// Scans past an optional `where` clause for the struct's body, which is
+/// either a `{ ... }` named-field group (returned), a `( ... )` tuple-struct
+/// group, or a `;` unit-struct terminator (both rejected, since only named
+/// fields have names to record).
+fn find_fields_group(remaining: &[TokenTree]) -> Result<Group, TokenStream> {
+    for token in remaining {
+        match token {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => {
+                return Err(compile_error_at(
+                    "StructPath supports structs with named fields only, not tuple structs",
+                    g.span(),
+                ));
+            }
+            TokenTree::Punct(p) if *p == ';' => {
+                return Err(compile_error_at(
+                    "StructPath supports structs with named fields only, not unit structs",
+                    p.span(),
+                ));
+            }
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
+                return Ok(g.clone());
+            }
+            _ => {}
+        }
+    }
+    Err(compile_error_at(
+        "StructPath: expected a struct body with named fields",
+        Span::call_site(),
+    ))
+}
+
+/// Parses a named-field struct body into its field names and plain-`pub`
+/// flags, in declaration order. A field's type is skipped rather than
+/// parsed: the derive never needs to reference a field's value, only its
+/// name, so the type tokens (however they nest, e.g. `HashMap<String,
+/// u64>`) are dropped once the name before the first top-level `:` is
+/// found.
+fn parse_derived_fields(fields_stream: TokenStream) -> Result<Vec<DerivedField>, TokenStream> {
+    let tokens: Vec<TokenTree> = fields_stream.into_iter().collect();
+    let mut fields = Vec::new();
+    for segment in split_top_level_commas(&tokens) {
+        let mut pos = 0;
+        skip_attributes(&segment, &mut pos);
+        let is_plain_pub = parse_field_visibility(&segment, &mut pos);
+        let name_ident = match segment.get(pos) {
+            Some(TokenTree::Ident(id)) => id,
+            _ => {
+                return Err(compile_error_at(
+                    "StructPath: expected a field name",
+                    segment
+                        .first()
+                        .map(|t| t.span())
+                        .unwrap_or_else(Span::call_site),
+                ))
+            }
+        };
+        let name = name_ident.to_string();
+        let name = name.strip_prefix("r#").unwrap_or(&name).to_string();
+        fields.push(DerivedField { name, is_plain_pub });
+    }
+    Ok(fields)
+}
+
+/// Builds a `[&'static str; N]` initializer literal from field-name
+/// strings, which are always valid identifiers (or their camelCase/
+/// PascalCase conversions), so no escaping beyond wrapping each one in
+/// quotes is needed.
+fn array_literal_tokens(values: &[String]) -> TokenStream {
+    let joined = values
+        .iter()
+        .map(|v| format!("\"{}\"", v))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", joined)
+        .parse()
+        .expect("field names always produce a valid array literal")
 }
