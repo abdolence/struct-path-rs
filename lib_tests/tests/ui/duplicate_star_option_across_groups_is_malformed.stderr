@@ -1,0 +1,7 @@
+error: Duplicate option is specified: visibility
+ --> tests/ui/duplicate_star_option_across_groups_is_malformed.rs:9:13
+  |
+9 |     let _ = paths!(TestStruct::*; visibility = "pub"; visibility = "all");
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

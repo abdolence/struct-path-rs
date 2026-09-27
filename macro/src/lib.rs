@@ -269,6 +269,12 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
             TokenTree::Punct(punct) if options_opened && punct == ',' => {
                 expect_option_value = false;
             }
+            // A second (or later) `;` starts another options group, so a
+            // wrapper macro can append its own options after the caller's.
+            // Groups share one key space; a repeated key takes its last value.
+            TokenTree::Punct(punct) if options_opened && punct == ';' => {
+                expect_option_value = false;
+            }
             others => {
                 return Err(format!(
                     "Unexpected input for struct path parameters: {:?}",
@@ -904,34 +910,40 @@ fn is_bare_type_path(tokens: &[TokenTree]) -> bool {
     }
 }
 
-/// The one grammar `Type::*;` options accept: `key = "value"` pairs
-/// separated by `,`, each value a quoted string or char literal. Unlike
-/// `path!`/`paths!`'s own option grammar -- parsed inline in their own
-/// loops, with a field list to cross-check its result against and a looser
-/// tolerance for malformed input -- `Type::*` has no such field list, so
-/// this parser accepts nothing looser: no bare key, no unquoted value, no
-/// two pairs run together without a comma, and no key repeated.
+/// The one grammar `Type::*;` options accept: one or more `;`-separated
+/// groups of `key = "value"` pairs, the pairs within a group separated by
+/// `,`, each value a quoted string or char literal. A group may be empty.
+/// Unlike `path!`/`paths!`'s own option grammar -- parsed inline in their
+/// own loops, with a field list to cross-check its result against and a
+/// looser tolerance for malformed input -- `Type::*` has no such field list,
+/// so this parser accepts nothing looser: no bare key, no unquoted value, no
+/// two pairs run together without a separator, no `;` straight after a `,`,
+/// and no key repeated, whether within one group or across groups.
 enum OptionParseState {
+    /// At the start of a group, where a `;` closes it as an empty group.
+    GroupStart,
+    /// After a `,`, where only an option name may follow.
     Key,
     Equals,
     Value,
     CommaOrEnd,
 }
 
-/// Parses the `key = "value", key = "value", ...` option grammar accepted
-/// after `Type::*;` (and, for the nested `Type::*` form, after the closing
-/// `)`). Keeps source order so the caller can report the first unknown key
-/// as written rather than in a hash map's arbitrary order, and rejects a
-/// key repeated later in the same list rather than silently keeping
-/// whichever value a lookup finds first.
+/// Parses the `key = "value", ...; key = "value", ...` option grammar
+/// accepted after `Type::*;` (and, for the nested `Type::*` form, after the
+/// closing `)`). `tokens` starts after the `;` that opens the first group.
+/// Keeps source order so the caller can report the first unknown key as
+/// written rather than in a hash map's arbitrary order, and rejects a key
+/// repeated later in the options, in the same group or a later one, rather
+/// than silently keeping whichever value a lookup finds first.
 fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)>, String> {
     let mut options: Vec<(String, String)> = Vec::new();
     let mut pending_key: Option<String> = None;
-    let mut state = OptionParseState::Key;
+    let mut state = OptionParseState::GroupStart;
 
     for token_tree in tokens {
         state = match (state, token_tree) {
-            (OptionParseState::Key, TokenTree::Ident(id)) => {
+            (OptionParseState::GroupStart | OptionParseState::Key, TokenTree::Ident(id)) => {
                 pending_key = Some(id.to_string());
                 OptionParseState::Equals
             }
@@ -947,12 +959,21 @@ fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)
             (OptionParseState::CommaOrEnd, TokenTree::Punct(p)) if *p == ',' => {
                 OptionParseState::Key
             }
+            // Later groups exist so a wrapper macro can append its own
+            // options after the caller's. They share one key space with the
+            // first group: a key repeated in a later group is still a
+            // duplicate, not an override.
+            (OptionParseState::CommaOrEnd | OptionParseState::GroupStart, TokenTree::Punct(p))
+                if *p == ';' =>
+            {
+                OptionParseState::GroupStart
+            }
             (state, other) => {
                 let expected = match state {
-                    OptionParseState::Key => "an option name",
+                    OptionParseState::GroupStart | OptionParseState::Key => "an option name",
                     OptionParseState::Equals => "`=`",
                     OptionParseState::Value => "a quoted string (\"...\") or char ('.') literal",
-                    OptionParseState::CommaOrEnd => "`,`",
+                    OptionParseState::CommaOrEnd => "`,` or `;`",
                 };
                 return Err(format!(
                     "Expected {} in `Type::*` options, found `{}`",
@@ -963,7 +984,9 @@ fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)
     }
 
     match state {
-        OptionParseState::Key | OptionParseState::CommaOrEnd => Ok(options),
+        OptionParseState::GroupStart | OptionParseState::Key | OptionParseState::CommaOrEnd => {
+            Ok(options)
+        }
         OptionParseState::Equals | OptionParseState::Value => Err(format!(
             "Missing a value for option `{}`",
             pending_key.expect("set on entering Equals/Value")
@@ -1112,6 +1135,12 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                 expect_option_value = true;
             }
             TokenTree::Punct(punct) if options_opened && punct == ',' => {
+                expect_option_value = false;
+            }
+            // A second (or later) `;` starts another options group, so a
+            // wrapper macro can append its own options after the caller's.
+            // Groups share one key space; a repeated key takes its last value.
+            TokenTree::Punct(punct) if options_opened && punct == ';' => {
                 expect_option_value = false;
             }
             others => {
