@@ -285,6 +285,80 @@ mod tests {
         assert_eq!(test_all, ["visible", "hidden"]);
     }
 
+    // Mirrors how a downstream crate (firestore-rs) wraps `path!`/`paths!` in
+    // its own `macro_rules!` to re-export them under its own name, forwarding
+    // the caller's tokens untouched via `$($x:tt)*`.
+    macro_rules! wrap {
+        ($($x:tt)*) => { struct_path::paths!($($x)*) };
+    }
+
+    macro_rules! wrap_path {
+        ($($x:tt)*) => { struct_path::path!($($x)*) };
+    }
+
+    // Mirrors a wrapper that appends its own option rather than forwarding
+    // the caller's tokens untouched, such as firestore-rs's camelCase helper.
+    macro_rules! camel_paths {
+        ($($x:tt)*) => { struct_path::paths!($($x)*; case = "camel") };
+    }
+
+    #[test]
+    fn path_and_paths_through_a_macro_rules_wrapper() {
+        // Plain `path!`/`paths!`: `.`, `~`, multiple structs, `{}` groups, options.
+        assert_eq!(
+            wrap_path!(TestStructParent::value_child.child_value_str),
+            "value_child.child_value_str"
+        );
+        assert_eq!(
+            wrap_path!(TestStructParent::opt_value_child~child_value_str),
+            "opt_value_child.child_value_str"
+        );
+        assert_eq!(
+            wrap_path!(
+                TestStructParent::value_str,
+                TestStructChild::child_value_str
+            ),
+            "value_str.child_value_str"
+        );
+        assert_eq!(
+            wrap!(TestStructParent::{ value_str, value_num }),
+            ["value_str", "value_num"]
+        );
+        assert_eq!(
+            wrap_path!(TestStructParent::value_child.child_value_str; delim = "/", case = "camel"),
+            "valueChild/childValueStr"
+        );
+
+        // Bare `Type::*`.
+        assert_eq!(wrap!(TestStructAllFields::*), ["value_str", "value_num"]);
+
+        // Nested `.(Child::*)` / `~(Child::*)`, with and without options.
+        assert_eq!(
+            wrap!(StarParent::child.(StarChild::*)),
+            ["child.a", "child.b"]
+        );
+        assert_eq!(
+            wrap!(StarParent::opt_child~(StarChild::*)),
+            ["opt_child.a", "opt_child.b"]
+        );
+        assert_eq!(
+            wrap!(StarParent::child.(StarChild::*); case = "pascal"),
+            ["Child.A", "Child.B"]
+        );
+        assert_eq!(
+            wrap!(StarParent::opt_child~(StarChild::*); case = "camel", delim = "/"),
+            ["optChild/a", "optChild/b"]
+        );
+
+        // A wrapper that appends its own options rather than forwarding the
+        // caller's tokens untouched, for both a field list and `Type::*`.
+        assert_eq!(
+            camel_paths!(TestStructParent::{ value_str, value_num }),
+            ["valueStr", "valueNum"]
+        );
+        assert_eq!(camel_paths!(StarChild::*), ["a", "b"]);
+    }
+
     #[test]
     fn struct_paths_all_fields_from_item_vis_fragment() {
         let test_pub_only = paths!(TestStructFromItemVisFragment::*);

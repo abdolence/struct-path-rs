@@ -100,7 +100,7 @@
 //!
 
 use convert_case::{Case, Casing};
-use proc_macro::{Delimiter, Group, Spacing, Span, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, Ident, Spacing, Span, TokenStream, TokenTree};
 use std::collections::HashMap;
 
 /// Converts a parse-time error into the token stream for a `compile_error!`
@@ -572,19 +572,27 @@ fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenS
 
     // `.` reads the field by reference and relies on deref coercion for a
     // `Box<Inner>` field; `~` reads it through `iter()` instead, which
-    // already yields a reference, so no leading `&` is added there. Either
-    // way the check's own literal tokens are spanned at the call site, like
-    // every other check this macro emits, while `INNER`/`FIELD` keep the
-    // user's own tokens so a mismatch is reported on them.
+    // already yields a reference, so no leading `&` is added there. `SELF`
+    // is spanned with `star_span` rather than this call's own `Span::call_site()`,
+    // matching the closure parameter `|t: &PARENT|` the outer `fill` below
+    // builds with `star_span` too: the two must share one hygiene context or
+    // the closure body fails to resolve its own parameter with "cannot find
+    // value `t` in this scope" once this whole call is itself expanded from
+    // inside a wrapping `macro_rules!`. The surrounding `.iter()`/`.next()`/
+    // `.unwrap()` glue keeps `Span::call_site()` so it is still recognized
+    // as macro-generated rather than linted as if the user had written it.
     let check_template = if connector == '~' {
-        "let _: &INNER = t.FIELD.iter().next().unwrap();"
+        "let _: &INNER = SELF.FIELD.iter().next().unwrap();"
     } else {
-        "let _: &INNER = &t.FIELD;"
+        "let _: &INNER = &SELF.FIELD;"
     };
+    let self_param_tokens: TokenStream =
+        TokenStream::from(TokenTree::Ident(Ident::new("t", star_span)));
     let check = fill(
         check_template,
         Span::call_site(),
         &[
+            ("SELF", &self_param_tokens),
             ("INNER", &inner_type_stream),
             ("FIELD", &field_check_tokens(&field_tokens)),
         ],
