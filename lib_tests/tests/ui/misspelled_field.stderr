@@ -1,0 +1,10 @@
+error[E0609]: no field `child_value_sr` on type `TestStructChild`
+  --> tests/ui/misspelled_field.rs:12:49
+   |
+12 |     let _ = path!(TestStructParent::value_child.child_value_sr);
+   |                                                 ^^^^^^^^^^^^^^ unknown field
+   |
+help: a field with a similar name exists
+   |
+12 |     let _ = path!(TestStructParent::value_child.child_value_str);
+   |                                                              +

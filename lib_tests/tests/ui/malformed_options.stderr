@@ -1,0 +1,7 @@
+error: Wrong options format
+ --> tests/ui/malformed_options.rs:8:13
+  |
+8 |     let _ = path!(TestStruct::value_str; = "x");
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `path` (in Nightly builds, run with -Z macro-backtrace for more info)
