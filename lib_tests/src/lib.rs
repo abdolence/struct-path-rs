@@ -39,6 +39,14 @@ mod tests {
 
         let test_opt_child = path!(TestStructParent::opt_value_child~child_value_str);
         assert_eq!(test_opt_child, "opt_value_child.child_value_str");
+
+        let test_opt_child_with_delim =
+            path!(TestStructParent::opt_value_child~child_value_str; delim = "/");
+        assert_eq!(test_opt_child_with_delim, "opt_value_child/child_value_str");
+
+        let test_opt_child_with_case =
+            path!(TestStructParent::opt_value_child~child_value_str; case = "pascal");
+        assert_eq!(test_opt_child_with_case, "OptValueChild.ChildValueStr");
     }
 
     #[test]

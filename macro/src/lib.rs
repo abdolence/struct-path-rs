@@ -21,6 +21,7 @@
 //!     pub value_str: String,
 //!     pub value_num: u64,
 //!     pub value_child: TestStructChild,
+//!     pub opt_value_child: Option<TestStructChild>,
 //! }
 //!
 //! pub struct TestStructChild {
@@ -40,6 +41,10 @@
 //!// options, returns "valueChild/childValueStr"
 //!let s4: &str = path!(TestStructParent::value_child.child_value_str; delim="/", case="camel") ;
 //!
+//!// `~` steps through a collection field (Vec, Option, ...) while still
+//!// verifying the path; returns "optValueChild/childValueStr"
+//!let s5: &str = path!(TestStructParent::opt_value_child~child_value_str; delim="/", case="camel") ;
+//!
 //!// returns ["value_str", "value_num"]
 //!let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
 //!
@@ -52,8 +57,37 @@ use convert_case::{Case, Casing};
 use proc_macro::{TokenStream, TokenTree};
 use std::collections::HashMap;
 
+/// Runs a macro body and converts a panic raised while parsing malformed
+/// input into a `compile_error!` at the call site, carrying the same
+/// message, instead of letting it surface as "proc macro panicked".
+fn catch_macro_panic(f: impl FnOnce() -> TokenStream) -> TokenStream {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    std::panic::set_hook(previous_hook);
+    match result {
+        Ok(stream) => stream,
+        Err(payload) => compile_error_for(payload),
+    }
+}
+
+fn compile_error_for(payload: Box<dyn std::any::Any + Send>) -> TokenStream {
+    let message = payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "struct_path macro failed on malformed input".to_string());
+    format!("compile_error!({:?})", message)
+        .parse()
+        .expect("a compile_error! invocation with an escaped string literal always parses")
+}
+
 #[proc_macro]
 pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
+    catch_macro_panic(|| paths_impl(struct_path_stream))
+}
+
+fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
     let mut current_struct_name: Option<String> = None;
     let mut current_struct_fields: Vec<String> = Vec::with_capacity(16);
 
@@ -206,7 +240,7 @@ pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
 
     for (_, struct_fields) in &found_structs {
         for field_path in struct_fields {
-            let mut final_field_path = field_path.clone().replace('~', ".");
+            let mut final_field_path = field_path.replace('~', ".");
             if !options.is_empty() {
                 final_field_path = apply_options(&options, final_field_path);
             }
@@ -227,7 +261,6 @@ pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
     }
 }
 
-#[inline]
 fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Vec<String>) {
     let mut current_field_path: Option<String> = None;
 
@@ -277,6 +310,10 @@ fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Ve
 
 #[proc_macro]
 pub fn path(struct_path_stream: TokenStream) -> TokenStream {
+    catch_macro_panic(|| path_impl(struct_path_stream))
+}
+
+fn path_impl(struct_path_stream: TokenStream) -> TokenStream {
     let mut current_struct_name: Option<String> = None;
 
     let mut opened_struct = false;
@@ -421,7 +458,11 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
 
     if let Some(full_field_path) = current_full_field_path.take() {
         let all_check_functions = generate_checks_code_for(&found_structs);
-        let final_field_path = apply_options(&options, full_field_path).replace('~', ".");
+        // `~` marks a collection step and must become the path separator
+        // before options are applied, or a segment joined by `~` is treated
+        // as one field name instead of two and never gets the chosen delim
+        // or per-segment case conversion.
+        let final_field_path = apply_options(&options, full_field_path.replace('~', "."));
         let result_str = format!("{{{}\n\"{}\"}}", all_check_functions, final_field_path);
         result_str.parse().unwrap()
     } else {
@@ -429,8 +470,7 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
     }
 }
 
-#[inline]
-fn generate_checks_code_for(found_structs: &Vec<(String, Vec<String>)>) -> String {
+fn generate_checks_code_for(found_structs: &[(String, Vec<String>)]) -> String {
     let mut all_check_functions = String::new();
 
     for (struct_name, struct_fields) in found_structs {
@@ -459,13 +499,12 @@ fn generate_checks_code_for(found_structs: &Vec<(String, Vec<String>)>) -> Strin
     all_check_functions
 }
 
-#[inline]
 fn apply_options(options: &HashMap<String, String>, field_path: String) -> String {
     let delim = options
         .get("delim")
         .as_ref()
         .map(|s| s.as_str())
-        .unwrap_or_else(|| ".");
+        .unwrap_or(".");
     let case = options.get("case");
     field_path
         .split('.')
