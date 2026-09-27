@@ -57,26 +57,10 @@ use convert_case::{Case, Casing};
 use proc_macro::{TokenStream, TokenTree};
 use std::collections::HashMap;
 
-/// Runs a macro body and converts a panic raised while parsing malformed
-/// input into a `compile_error!` at the call site, carrying the same
-/// message, instead of letting it surface as "proc macro panicked".
-fn catch_macro_panic(f: impl FnOnce() -> TokenStream) -> TokenStream {
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-    std::panic::set_hook(previous_hook);
-    match result {
-        Ok(stream) => stream,
-        Err(payload) => compile_error_for(payload),
-    }
-}
-
-fn compile_error_for(payload: Box<dyn std::any::Any + Send>) -> TokenStream {
-    let message = payload
-        .downcast_ref::<&str>()
-        .map(|s| s.to_string())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "struct_path macro failed on malformed input".to_string());
+/// Converts a parse-time error into the token stream for a `compile_error!`
+/// invocation, so malformed macro input surfaces as a normal compiler error
+/// carrying the same message instead of a proc-macro panic.
+fn compile_error_for(message: String) -> TokenStream {
     format!("compile_error!({:?})", message)
         .parse()
         .expect("a compile_error! invocation with an escaped string literal always parses")
@@ -84,10 +68,13 @@ fn compile_error_for(payload: Box<dyn std::any::Any + Send>) -> TokenStream {
 
 #[proc_macro]
 pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
-    catch_macro_panic(|| paths_impl(struct_path_stream))
+    match paths_impl(struct_path_stream) {
+        Ok(stream) => stream,
+        Err(message) => compile_error_for(message),
+    }
 }
 
-fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
+fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
     let mut current_struct_name: Option<String> = None;
     let mut current_struct_fields: Vec<String> = Vec::with_capacity(16);
 
@@ -146,14 +133,14 @@ fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
                 if let Some(ref mut field_path) = &mut current_field_path {
                     field_path.push(punct.as_char());
                 } else {
-                    panic!(
+                    return Err(format!(
                         "Unexpected punctuation input for struct path group parameters: {:?}",
                         punct
-                    )
+                    ));
                 }
             }
             TokenTree::Group(group) if opened_struct && current_field_path.is_none() => {
-                parse_multiple_fields(group.stream(), &mut current_struct_fields)
+                parse_multiple_fields(group.stream(), &mut current_struct_fields)?
             }
             TokenTree::Punct(punct) if !options_opened && opened_struct && punct == ',' => {
                 opened_struct = false;
@@ -166,10 +153,13 @@ fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
                         found_structs
                             .push((struct_name, std::mem::take(&mut current_struct_fields)));
                     } else {
-                        panic!("Unexpected comma with empty fields for {}!", struct_name);
+                        return Err(format!(
+                            "Unexpected comma with empty fields for {}!",
+                            struct_name
+                        ));
                     }
                 } else {
-                    panic!("Unexpected comma with empty definitions!");
+                    return Err("Unexpected comma with empty definitions!".to_string());
                 }
             }
             TokenTree::Punct(punct) if punct == ';' && opened_struct && !options_opened => {
@@ -186,7 +176,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
                         options.insert(option_name, id.to_string());
                     }
                     _ => {
-                        panic!("Wrong options format")
+                        return Err("Wrong options format".to_string());
                     }
                 }
             }
@@ -201,7 +191,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
                         );
                     }
                     _ => {
-                        panic!("Wrong options format")
+                        return Err("Wrong options format".to_string());
                     }
                 }
             }
@@ -212,7 +202,10 @@ fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
                 expect_option_value = false;
             }
             others => {
-                panic!("Unexpected input for struct path parameters: {:?}", others)
+                return Err(format!(
+                    "Unexpected input for struct path parameters: {:?}",
+                    others
+                ));
             }
         }
     }
@@ -228,10 +221,13 @@ fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
         if !current_struct_fields.is_empty() {
             found_structs.push((struct_name, std::mem::take(&mut current_struct_fields)));
         } else {
-            panic!("Unexpected comma with empty fields for {}!", struct_name);
+            return Err(format!(
+                "Unexpected comma with empty fields for {}!",
+                struct_name
+            ));
         }
     } else {
-        panic!("Unexpected comma with empty definitions!");
+        return Err("Unexpected comma with empty definitions!".to_string());
     }
 
     let all_check_functions = generate_checks_code_for(&found_structs);
@@ -242,26 +238,29 @@ fn paths_impl(struct_path_stream: TokenStream) -> TokenStream {
         for field_path in struct_fields {
             let mut final_field_path = field_path.replace('~', ".");
             if !options.is_empty() {
-                final_field_path = apply_options(&options, final_field_path);
+                final_field_path = apply_options(&options, final_field_path)?;
             }
             all_final_fields.push(format!("\"{}\"", final_field_path))
         }
     }
 
     if !all_final_fields.is_empty() {
-        format!(
+        Ok(format!(
             "{{{}\n[{}]}}",
             all_check_functions,
             all_final_fields.join(",")
         )
         .parse()
-        .unwrap()
+        .unwrap())
     } else {
-        panic!("Empty struct fields")
+        Err("Empty struct fields".to_string())
     }
 }
 
-fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Vec<String>) {
+fn parse_multiple_fields(
+    group_stream: TokenStream,
+    found_struct_fields: &mut Vec<String>,
+) -> Result<(), String> {
     let mut current_field_path: Option<String> = None;
 
     for token_tree in group_stream.into_iter() {
@@ -278,27 +277,27 @@ fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Ve
                     found_struct_fields.push(field_path);
                     current_field_path = None;
                 } else {
-                    panic!(
+                    return Err(format!(
                         "Unexpected punctuation input for struct path group parameters: {:?}",
                         punct
-                    )
+                    ));
                 }
             }
             TokenTree::Punct(punct) if punct == '.' => {
                 if let Some(ref mut field_path) = &mut current_field_path {
                     field_path.push('.');
                 } else {
-                    panic!(
+                    return Err(format!(
                         "Unexpected punctuation input for struct path group parameters: {:?}",
                         punct
-                    )
+                    ));
                 }
             }
             others => {
-                panic!(
+                return Err(format!(
                     "Unexpected input for struct path group parameters: {:?}",
                     others
-                )
+                ));
             }
         }
     }
@@ -306,14 +305,18 @@ fn parse_multiple_fields(group_stream: TokenStream, found_struct_fields: &mut Ve
     if let Some(field_path) = current_field_path.take() {
         found_struct_fields.push(field_path);
     }
+    Ok(())
 }
 
 #[proc_macro]
 pub fn path(struct_path_stream: TokenStream) -> TokenStream {
-    catch_macro_panic(|| path_impl(struct_path_stream))
+    match path_impl(struct_path_stream) {
+        Ok(stream) => stream,
+        Err(message) => compile_error_for(message),
+    }
 }
 
-fn path_impl(struct_path_stream: TokenStream) -> TokenStream {
+fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
     let mut current_struct_name: Option<String> = None;
 
     let mut opened_struct = false;
@@ -372,10 +375,10 @@ fn path_impl(struct_path_stream: TokenStream) -> TokenStream {
                 if let Some(ref mut field_path) = &mut current_field_path {
                     field_path.push(punct.as_char());
                 } else {
-                    panic!(
+                    return Err(format!(
                         "Unexpected punctuation input for struct path group parameters: {:?}",
                         punct
-                    )
+                    ));
                 }
             }
             TokenTree::Punct(punct) if !options_opened && opened_struct && punct == ',' => {
@@ -392,10 +395,13 @@ fn path_impl(struct_path_stream: TokenStream) -> TokenStream {
                             current_full_field_path = Some(field_path)
                         }
                     } else {
-                        panic!("Unexpected comma with empty fields for {}!", struct_name);
+                        return Err(format!(
+                            "Unexpected comma with empty fields for {}!",
+                            struct_name
+                        ));
                     }
                 } else {
-                    panic!("Unexpected comma with empty definitions!");
+                    return Err("Unexpected comma with empty definitions!".to_string());
                 }
             }
             TokenTree::Punct(punct) if punct == ';' && opened_struct && !options_opened => {
@@ -412,7 +418,7 @@ fn path_impl(struct_path_stream: TokenStream) -> TokenStream {
                         options.insert(option_name, id.to_string());
                     }
                     _ => {
-                        panic!("Wrong options format")
+                        return Err("Wrong options format".to_string());
                     }
                 }
             }
@@ -427,7 +433,7 @@ fn path_impl(struct_path_stream: TokenStream) -> TokenStream {
                         );
                     }
                     _ => {
-                        panic!("Wrong options format")
+                        return Err("Wrong options format".to_string());
                     }
                 }
             }
@@ -438,7 +444,10 @@ fn path_impl(struct_path_stream: TokenStream) -> TokenStream {
                 expect_option_value = false;
             }
             others => {
-                panic!("Unexpected input for struct path parameters: {:?}", others)
+                return Err(format!(
+                    "Unexpected input for struct path parameters: {:?}",
+                    others
+                ));
             }
         }
     }
@@ -462,11 +471,11 @@ fn path_impl(struct_path_stream: TokenStream) -> TokenStream {
         // before options are applied, or a segment joined by `~` is treated
         // as one field name instead of two and never gets the chosen delim
         // or per-segment case conversion.
-        let final_field_path = apply_options(&options, full_field_path.replace('~', "."));
+        let final_field_path = apply_options(&options, full_field_path.replace('~', "."))?;
         let result_str = format!("{{{}\n\"{}\"}}", all_check_functions, final_field_path);
-        result_str.parse().unwrap()
+        Ok(result_str.parse().unwrap())
     } else {
-        panic!("Unexpected empty path definition!");
+        Err("Unexpected empty path definition!".to_string())
     }
 }
 
@@ -499,26 +508,26 @@ fn generate_checks_code_for(found_structs: &[(String, Vec<String>)]) -> String {
     all_check_functions
 }
 
-fn apply_options(options: &HashMap<String, String>, field_path: String) -> String {
+fn apply_options(options: &HashMap<String, String>, field_path: String) -> Result<String, String> {
     let delim = options
         .get("delim")
         .as_ref()
         .map(|s| s.as_str())
         .unwrap_or(".");
     let case = options.get("case");
-    field_path
+    let segments = field_path
         .split('.')
         .map(|field_name| {
             if let Some(case_value) = case {
                 match case_value.as_str() {
-                    "camel" => field_name.from_case(Case::Snake).to_case(Case::Camel),
-                    "pascal" => field_name.from_case(Case::Snake).to_case(Case::Pascal),
-                    another => panic!("Unknown case is specified: {}", another),
+                    "camel" => Ok(field_name.from_case(Case::Snake).to_case(Case::Camel)),
+                    "pascal" => Ok(field_name.from_case(Case::Snake).to_case(Case::Pascal)),
+                    another => Err(format!("Unknown case is specified: {}", another)),
                 }
             } else {
-                field_name.to_string()
+                Ok(field_name.to_string())
             }
         })
-        .collect::<Vec<String>>()
-        .join(delim)
+        .collect::<Result<Vec<String>, String>>()?;
+    Ok(segments.join(delim))
 }
