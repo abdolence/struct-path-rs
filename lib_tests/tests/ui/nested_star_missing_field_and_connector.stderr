@@ -1,0 +1,7 @@
+error: expected a field name before `.(` / `~(`
+ --> tests/ui/nested_star_missing_field_and_connector.rs:8:13
+  |
+8 |     let _ = paths!(T::(a, *));
+  |             ^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

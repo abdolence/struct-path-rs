@@ -428,6 +428,18 @@ const NOTHING_AFTER_NESTED_STAR_MESSAGE: &str = "nothing may follow a nested `Ty
 /// once combined with anything else.
 const CANNOT_COMBINE_NESTED_STAR_MESSAGE: &str = "a nested `Type::*` cannot be combined with another struct or field group: its length is unknown to the macro";
 
+/// Reported when the nested form's own `.(`/`~(` has nothing valid before
+/// it: no field name and connector at all (`Type::(a, *)`), or a stray
+/// punct where a field name was expected (`Parent::..(Child::*)`). Named
+/// after the connector rather than after whichever token was actually found,
+/// since callers hit this from more than one parse state.
+const NESTED_STAR_MISSING_FIELD_MESSAGE: &str = "expected a field name before `.(` / `~(`";
+
+/// Reported when a nested `Type::*`'s own parentheses hold no `*` at all
+/// (`Parent::child.(f)`): the field name and connector before the parens are
+/// fine, but their content is not `Inner::*`.
+const NESTED_STAR_INNER_EXPECTED_MESSAGE: &str = "inside the parens, expected `Type::*`";
+
 /// Recognizes `paths!`'s nested `Type::*` form -- `Parent::field(.field|
 /// ~field)*.(Inner::*)` or the same ending in `~(Inner::*)`, optionally
 /// followed by `; options`. A `(...)` group on its own is not enough to mark
@@ -436,33 +448,44 @@ const CANNOT_COMBINE_NESTED_STAR_MESSAGE: &str = "a nested `Type::*` cannot be c
 /// unchanged. Only a `(...)` group directly preceded by `.`/`~`, or one that
 /// itself contains a `*`, is claimed here; every other input, including one
 /// with a `(...)` group elsewhere, falls through to the parsers that handled
-/// it before this form existed.
+/// it before this form existed. Every top-level `(...)` group is checked in
+/// order, not just the first: `A::(x), B::c.(C::*)` has a plain field-group
+/// paren before the nested form's own, and the first one alone would never
+/// claim this input.
 fn try_parse_nested_star(tokens: &[TokenTree]) -> Option<Result<TokenStream, String>> {
-    let paren_idx = tokens.iter().position(
-        |t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis),
-    )?;
-    let follows_connector = paren_idx
-        .checked_sub(1)
-        .is_some_and(|i| matches!(&tokens[i], TokenTree::Punct(p) if *p == '.' || *p == '~'));
-    let group = match &tokens[paren_idx] {
-        TokenTree::Group(g) => g,
-        _ => unreachable!(),
-    };
-    let contains_star = group
-        .stream()
-        .into_iter()
-        .any(|t| matches!(t, TokenTree::Punct(p) if p == '*'));
-    if !follows_connector && !contains_star {
-        return None;
-    }
+    let paren_idx = tokens.iter().enumerate().find_map(|(i, t)| {
+        let group = match t {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis => g,
+            _ => return None,
+        };
+        let follows_connector = i
+            .checked_sub(1)
+            .is_some_and(|j| matches!(&tokens[j], TokenTree::Punct(p) if *p == '.' || *p == '~'));
+        let contains_star = group
+            .stream()
+            .into_iter()
+            .any(|t| matches!(t, TokenTree::Punct(p) if p == '*'));
+        (follows_connector || contains_star).then_some(i)
+    })?;
     Some(parse_nested_star_at(tokens, paren_idx))
 }
 
 fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenStream, String> {
     let prefix_region = &tokens[..paren_idx];
-    // A `{ ... }` field group takes precedence over the comma check below: it
-    // names one specific mistake (alternatives where the form wants a single
-    // path), while a bare comma could equally mean a second struct entirely.
+    // A second struct or field group before the nested form (`Other::x,
+    // Parent::child.(Child::*)`) would otherwise reach `parse_type_and_field_path`
+    // as one malformed type path and get the generic "expected a type path"
+    // message; the comma marks the real problem, the same way
+    // `parse_all_fields_at` tells the two apart for the bare form. Checked
+    // before the `{ ... }` group check below, since a comma marks the same
+    // "second group" mistake whether or not a `{ ... }` group happens to be
+    // one of the groups involved (`A::{x}, B::c.(C::*)` and `A::[x], B::c.(C::*)`
+    // are the same mistake and must report it the same way).
+    if contains_top_level_comma(prefix_region) {
+        return Err(CANNOT_COMBINE_NESTED_STAR_MESSAGE.to_string());
+    }
+    // With no comma present, a `{ ... }` field group still names one specific
+    // mistake more precisely than the generic type-path error below would.
     if prefix_region
         .iter()
         .any(|t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Brace))
@@ -471,22 +494,10 @@ fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenS
             "a `{ ... }` field group cannot appear before a nested `Type::*`; use a plain field path such as `Parent::child.(Child::*)`".to_string(),
         );
     }
-    // A second struct or field group before the nested form (`Other::x,
-    // Parent::child.(Child::*)`) would otherwise reach `parse_type_and_field_path`
-    // as one malformed type path and get the generic "expected a type path"
-    // message; the comma marks the real problem, the same way
-    // `parse_all_fields_at` tells the two apart for the bare form.
-    if contains_top_level_comma(prefix_region) {
-        return Err(CANNOT_COMBINE_NESTED_STAR_MESSAGE.to_string());
-    }
 
     let connector = match paren_idx.checked_sub(1).map(|i| &tokens[i]) {
         Some(TokenTree::Punct(p)) if *p == '.' || *p == '~' => p.clone(),
-        _ => {
-            return Err(
-                "expected `.` or `~` immediately before a nested `Type::*`, e.g. `Parent::child.(Child::*)`".to_string(),
-            )
-        }
+        _ => return Err(NESTED_STAR_MISSING_FIELD_MESSAGE.to_string()),
     };
     let head = &prefix_region[..prefix_region.len() - 1];
     let (parent_tokens, field_tokens) = parse_type_and_field_path(head)?;
@@ -524,6 +535,11 @@ fn parse_nested_star_at(tokens: &[TokenTree], paren_idx: usize) -> Result<TokenS
     let options = match rest {
         [] => Vec::new(),
         [TokenTree::Punct(p), remainder @ ..] if *p == ';' => parse_all_fields_options(remainder)?,
+        // A lone trailing comma with nothing following it is not a second
+        // group, just malformed input -- the same call `parse_all_fields_at`
+        // makes for the bare form's own `TestStruct::*,`, so both forms
+        // report the same message for the same shape of mistake.
+        [TokenTree::Punct(p)] if *p == ',' => return Err(EXPECTED_TYPE_PATH_MESSAGE.to_string()),
         _ => return Err(CANNOT_COMBINE_NESTED_STAR_MESSAGE.to_string()),
     };
     // `visibility`/`case` pick the inner type's names const exactly as the
@@ -666,7 +682,7 @@ fn parse_type_and_field_path(
             }
             TokenTree::Punct(punct) if opened_struct && (punct == '.' || punct == '~') => {
                 if field_tokens.is_empty() {
-                    return Err(EXPECTED_TYPE_PATH_MESSAGE.to_string());
+                    return Err(NESTED_STAR_MISSING_FIELD_MESSAGE.to_string());
                 }
                 field_tokens.push(TokenTree::Punct(punct));
             }
@@ -703,12 +719,13 @@ fn split_star_type(tokens: &[TokenTree]) -> Result<(&[TokenTree], Span, &[TokenT
     Ok((&tokens[..star_pos - 2], star_span, &tokens[star_pos + 1..]))
 }
 
-/// Whether `tokens` is exactly the single identifier `Self`, the one type
-/// path a nested `Type::*`'s inner type must reject: the join it drives is
-/// wrapped in a block-local `const`, and `Self` cannot be named from a
-/// nested item, only from the enclosing `impl` block itself (E0401).
-fn is_bare_self(tokens: &[TokenTree]) -> bool {
-    matches!(tokens, [TokenTree::Ident(id)] if id.to_string() == "Self")
+/// Whether `tokens` is a type path that starts with `Self`, the one type
+/// a nested `Type::*`'s inner type must reject regardless of what follows
+/// (`Self`, `Self::Child`, ...): the join it drives is wrapped in a
+/// block-local `const`, and `Self` cannot be named from a nested item, only
+/// from the enclosing `impl` block itself (E0401).
+fn is_self_type_path(tokens: &[TokenTree]) -> bool {
+    matches!(tokens.first(), Some(TokenTree::Ident(id)) if id.to_string() == "Self")
 }
 
 /// Parses the parenthesized group's content as a bare `Type::*` with
@@ -717,11 +734,22 @@ fn is_bare_self(tokens: &[TokenTree]) -> bool {
 /// inner type's tokens and the `*`'s span, used to anchor the generated
 /// call so a missing derive or a mismatched type is reported there.
 fn parse_bare_star_type(tokens: &[TokenTree]) -> Result<(Vec<TokenTree>, Span), String> {
+    // Checked ahead of `split_star_type`, which has no `*` to report a span
+    // for otherwise: the field name and connector before the parens are
+    // already known good at this call site, so the more specific message
+    // points at the parens' own content rather than repeating the generic
+    // type-path message that content with no `*` anywhere else falls back to.
+    if !tokens
+        .iter()
+        .any(|t| matches!(t, TokenTree::Punct(p) if *p == '*'))
+    {
+        return Err(NESTED_STAR_INNER_EXPECTED_MESSAGE.to_string());
+    }
     let (type_tokens, star_span, rest) = split_star_type(tokens)?;
     if type_tokens.is_empty() || !is_bare_type_path(type_tokens) {
         return Err(EXPECTED_TYPE_PATH_MESSAGE.to_string());
     }
-    if is_bare_self(type_tokens) {
+    if is_self_type_path(type_tokens) {
         return Err(
             "`Self` cannot be named inside a nested `Type::*`; name the type directly, e.g. `Node::next~(Node::*)`".to_string(),
         );
