@@ -1,0 +1,7 @@
+error: inside the parens, expected `Type::*`
+ --> tests/ui/nested_star_inner_missing_star.rs:8:13
+  |
+8 |     let _ = paths!(T::a.(f));
+  |             ^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

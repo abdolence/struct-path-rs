@@ -1,0 +1,7 @@
+error: nesting a parenthesized group inside `Type::*` is not supported
+  --> tests/ui/nested_star_nested_parens.rs:17:13
+   |
+17 |     let _ = paths!(Parent::a.(A::b.(B::*)));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

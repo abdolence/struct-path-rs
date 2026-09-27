@@ -1,0 +1,9 @@
+error[E0308]: mismatched types
+  --> tests/ui/nested_star_type_mismatch.rs:17:13
+   |
+17 |     let _ = paths!(Parent::child.(Child::*));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&Child`, found `&Other`
+   |
+   = note: expected reference `&Child`
+              found reference `&Other`
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

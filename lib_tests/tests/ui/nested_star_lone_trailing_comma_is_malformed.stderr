@@ -1,0 +1,7 @@
+error: expected a type path such as `Type::*` or `crate::module::Type::*`
+  --> tests/ui/nested_star_lone_trailing_comma_is_malformed.rs:13:13
+   |
+13 |     let _ = paths!(Parent::child.(Child::*),);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,8 @@
+error[E0599]: no associated function or constant named `__STRUCT_PATH_PUB_FIELDS` found for struct `TestStruct` in the current scope
+ --> tests/ui/star_without_derive.rs:8:32
+  |
+3 | struct TestStruct {
+  | ----------------- associated function or constant `__STRUCT_PATH_PUB_FIELDS` not found for this struct
+...
+8 |     let _ = paths!(TestStruct::*);
+  |                                ^ associated function or constant not found in `TestStruct`

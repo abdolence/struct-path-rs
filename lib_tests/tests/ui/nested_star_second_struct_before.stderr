@@ -1,0 +1,7 @@
+error: a nested `Type::*` cannot be combined with another struct or field group: its length is unknown to the macro
+  --> tests/ui/nested_star_second_struct_before.rs:17:13
+   |
+17 |     let _ = paths!(Other::x, Parent::child.(Child::*));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

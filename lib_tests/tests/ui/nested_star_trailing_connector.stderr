@@ -1,0 +1,7 @@
+error: expected a field name immediately before the nested `Type::*`'s connector, e.g. `Parent::child.(Child::*)`
+  --> tests/ui/nested_star_trailing_connector.rs:13:13
+   |
+13 |     let _ = paths!(Parent::o~.(Child::*));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

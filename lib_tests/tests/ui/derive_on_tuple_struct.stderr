@@ -1,0 +1,5 @@
+error: StructPath supports structs with named fields only, not tuple structs
+ --> tests/ui/derive_on_tuple_struct.rs:4:18
+  |
+4 | struct TestStruct(String, u64);
+  |                  ^^^^^^^^^^^^^

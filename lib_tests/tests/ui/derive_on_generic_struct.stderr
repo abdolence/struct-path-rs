@@ -1,0 +1,5 @@
+error: StructPath only supports lifetime generic parameters
+ --> tests/ui/derive_on_generic_struct.rs:4:19
+  |
+4 | struct TestStruct<T> {
+  |                   ^

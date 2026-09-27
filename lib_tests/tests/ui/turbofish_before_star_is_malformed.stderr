@@ -1,0 +1,7 @@
+error: expected a type path such as `Type::*` or `crate::module::Type::*`
+ --> tests/ui/turbofish_before_star_is_malformed.rs:9:13
+  |
+9 |     let _ = paths!(TestStruct::<'a>::*);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

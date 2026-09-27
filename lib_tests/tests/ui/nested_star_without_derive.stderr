@@ -1,0 +1,35 @@
+error[E0599]: no associated function or constant named `__STRUCT_PATH_PUB_FIELDS` found for struct `Child` in the current scope
+  --> tests/ui/nested_star_without_derive.rs:12:42
+   |
+ 3 | struct Child {
+   | ------------ associated function or constant `__STRUCT_PATH_PUB_FIELDS` not found for this struct
+...
+12 |     let _ = paths!(Parent::child.(Child::*));
+   |                                          ^ associated function or constant not found in `Child`
+
+error[E0599]: no associated function or constant named `__struct_path_joined_len` found for struct `Child` in the current scope
+  --> tests/ui/nested_star_without_derive.rs:12:42
+   |
+ 3 | struct Child {
+   | ------------ associated function or constant `__struct_path_joined_len` not found for this struct
+...
+12 |     let _ = paths!(Parent::child.(Child::*));
+   |                                          ^ associated function or constant not found in `Child`
+
+error[E0599]: no associated function or constant named `__struct_path_joined_bytes` found for struct `Child` in the current scope
+  --> tests/ui/nested_star_without_derive.rs:12:42
+   |
+ 3 | struct Child {
+   | ------------ associated function or constant `__struct_path_joined_bytes` not found for this struct
+...
+12 |     let _ = paths!(Parent::child.(Child::*));
+   |                                          ^ associated function or constant not found in `Child`
+
+error[E0599]: no associated function or constant named `__struct_path_joined` found for struct `Child` in the current scope
+  --> tests/ui/nested_star_without_derive.rs:12:42
+   |
+ 3 | struct Child {
+   | ------------ associated function or constant `__struct_path_joined` not found for this struct
+...
+12 |     let _ = paths!(Parent::child.(Child::*));
+   |                                          ^ associated function or constant not found in `Child`

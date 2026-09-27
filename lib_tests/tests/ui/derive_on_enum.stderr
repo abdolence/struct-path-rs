@@ -1,0 +1,5 @@
+error: StructPath supports structs with named fields only, not enums
+ --> tests/ui/derive_on_enum.rs:4:1
+  |
+4 | enum TestEnum {
+  | ^^^^

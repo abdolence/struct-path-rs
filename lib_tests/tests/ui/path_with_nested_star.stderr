@@ -1,0 +1,7 @@
+error: `*` for all declared fields is only supported by paths!, not path!
+  --> tests/ui/path_with_nested_star.rs:13:13
+   |
+13 |     let _ = path!(Parent::child.(Child::*));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `path` (in Nightly builds, run with -Z macro-backtrace for more info)

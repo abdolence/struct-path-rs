@@ -1,0 +1,7 @@
+error: Unknown option is specified: zz_first
+ --> tests/ui/unknown_star_option_reports_first_in_source_order.rs:9:13
+  |
+9 |     let _ = paths!(TestStruct::*; zz_first = "1", aa_second = "2");
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

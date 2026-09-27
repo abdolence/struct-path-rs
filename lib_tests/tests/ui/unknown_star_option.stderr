@@ -1,0 +1,7 @@
+error: Unknown option is specified: visiblity
+ --> tests/ui/unknown_star_option.rs:9:13
+  |
+9 |     let _ = paths!(TestStruct::*; visiblity = "all");
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

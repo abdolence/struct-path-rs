@@ -1,0 +1,7 @@
+error: `Type::*` cannot be combined with another struct or field group: its length is unknown to the macro
+  --> tests/ui/star_mixed_with_group_last.rs:13:13
+   |
+13 |     let _ = paths!(TestStructB::value_num, TestStructA::*);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

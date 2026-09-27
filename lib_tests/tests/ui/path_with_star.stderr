@@ -1,0 +1,7 @@
+error: `*` for all declared fields is only supported by paths!, not path!
+ --> tests/ui/path_with_star.rs:9:13
+  |
+9 |     let _ = path!(TestStruct::*);
+  |             ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `path` (in Nightly builds, run with -Z macro-backtrace for more info)
