@@ -368,11 +368,8 @@ mod tests {
 
     #[test]
     fn camel_wrapper_appends_after_caller_options_past_forty_dotted_paths() {
-        // struct-path's own field-list parser is one iterative loop over the
-        // input tokens, not a recursive `macro_rules!` muncher, so it has no
-        // recursion-limit ceiling on how many comma-separated dotted paths one
-        // call can hold -- unlike a hand-rolled recursive wrapper, which hits
-        // the compiler's default limit around 21.
+        // A wrapper that appends its own options group must still accept a
+        // long list of dotted paths from the caller.
         let result = camel_paths!(
             TestStructParent::value_child.child_value_str,
             TestStructParent::value_child.child_value_str,
