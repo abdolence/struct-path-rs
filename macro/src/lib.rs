@@ -184,11 +184,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                 expect_option_value = false;
                 match current_option_name.take() {
                     Some(option_name) => {
-                        let lit_str = lit.to_string();
-                        options.insert(
-                            option_name,
-                            lit_str.as_str()[1..lit_str.len() - 1].to_string(),
-                        );
+                        options.insert(option_name, unquote_literal(&lit)?);
                     }
                     _ => {
                         return Err("Wrong options format".to_string());
@@ -245,13 +241,14 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
     }
 
     if !all_final_fields.is_empty() {
-        Ok(format!(
+        let result_str = format!(
             "{{{}\n[{}]}}",
             all_check_functions,
             all_final_fields.join(",")
-        )
-        .parse()
-        .unwrap())
+        );
+        result_str
+            .parse()
+            .map_err(|_| format!("Generated code failed to parse: {}", result_str))
     } else {
         Err("Empty struct fields".to_string())
     }
@@ -426,11 +423,7 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                 expect_option_value = false;
                 match current_option_name.take() {
                     Some(option_name) => {
-                        let lit_str = lit.to_string();
-                        options.insert(
-                            option_name,
-                            lit_str.as_str()[1..lit_str.len() - 1].to_string(),
-                        );
+                        options.insert(option_name, unquote_literal(&lit)?);
                     }
                     _ => {
                         return Err("Wrong options format".to_string());
@@ -473,7 +466,9 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
         // or per-segment case conversion.
         let final_field_path = apply_options(&options, full_field_path.replace('~', "."))?;
         let result_str = format!("{{{}\n\"{}\"}}", all_check_functions, final_field_path);
-        Ok(result_str.parse().unwrap())
+        result_str
+            .parse()
+            .map_err(|_| format!("Generated code failed to parse: {}", result_str))
     } else {
         Err("Unexpected empty path definition!".to_string())
     }
@@ -498,6 +493,29 @@ fn generate_checks_code_for(found_structs: &[(String, Vec<String>)]) -> String {
         all_check_functions.push_str(&check_functions);
     }
     all_check_functions
+}
+
+/// Strips the surrounding quotes from a plain string (`"..."`) or char
+/// (`'.'`) literal, keeping the source spelling of any escapes untouched
+/// rather than decoding them, so `delim`/`case` values compile to the exact
+/// same output they always have. Any other literal kind — numeric, byte
+/// string, byte char, raw string — is rejected here: none of them slice into
+/// a valid value at this offset, and accepting one used to either panic on
+/// the slice bound or hand the raw token text on to generate invalid code.
+fn unquote_literal(lit: &proc_macro::Literal) -> Result<String, String> {
+    let text = lit.to_string();
+    let bytes = text.as_bytes();
+    let is_quoted = bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''));
+    if is_quoted {
+        Ok(text[1..text.len() - 1].to_string())
+    } else {
+        Err(format!(
+            "Unsupported option value {}: expected a string (\"...\") or char ('.') literal",
+            text
+        ))
+    }
 }
 
 fn apply_options(options: &HashMap<String, String>, field_path: String) -> Result<String, String> {

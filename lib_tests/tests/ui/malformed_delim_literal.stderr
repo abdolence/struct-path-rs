@@ -1,0 +1,7 @@
+error: Unsupported option value 5: expected a string ("...") or char ('.') literal
+ --> tests/ui/malformed_delim_literal.rs:8:13
+  |
+8 |     let _ = path!(TestStruct::value_str; delim = 5);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `path` (in Nightly builds, run with -Z macro-backtrace for more info)
