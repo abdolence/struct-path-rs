@@ -1,0 +1,10 @@
+error: expected a type path such as `Type::*` or `crate::module::Type::*`
+  --> tests/ui/ty_fragment_before_star_is_malformed.rs:10:9
+   |
+10 |         paths!($t::*)
+   |         ^^^^^^^^^^^^^
+...
+15 |     let _ = all_fields_of!(TestStruct);
+   |             -------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `paths` which comes from the expansion of the macro `all_fields_of` (in Nightly builds, run with -Z macro-backtrace for more info)

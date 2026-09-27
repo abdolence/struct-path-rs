@@ -2,6 +2,14 @@
 #[doc = include_str!("../../README.md")]
 pub struct ReadmeDoctests;
 
+/// Not `#[cfg(test)]`: an integration test (`tests/*.rs`) needs this crate's
+/// own name in the extern prelude to exercise `paths!(::struct_path_tests::...::*)`,
+/// which a `#[cfg(test)]`-gated item would not give it.
+#[derive(struct_path::StructPath)]
+pub struct LeadingDoubleColonTarget {
+    pub value_str: String,
+}
+
 #[allow(dead_code)]
 #[cfg(test)]
 mod tests {
@@ -91,6 +99,21 @@ mod tests {
     }
 
     mk_struct_from_vis_fragments!(TestStructFromVisFragments { pub visible: u8, hidden: u8 });
+
+    macro_rules! mk_struct_with_item_vis_fragment {
+        ($v:vis $n:ident) => {
+            #[derive(StructPath)]
+            $v struct $n {
+                pub value_str: String,
+            }
+        };
+    }
+
+    // An unmatched `$v:vis` (private) arrives at the derive as an empty
+    // `Group(Delimiter::None)`, not as zero tokens; this struct's own item
+    // visibility exercises that unwrapping, distinct from the field-level
+    // `$fv:vis` fragments `TestStructFromVisFragments` already covers.
+    mk_struct_with_item_vis_fragment!(TestStructFromItemVisFragment);
 
     pub mod nested {
         use struct_path::StructPath;
@@ -210,5 +233,14 @@ mod tests {
 
         let test_all = paths!(TestStructFromVisFragments::*; visibility = "all");
         assert_eq!(test_all, ["visible", "hidden"]);
+    }
+
+    #[test]
+    fn struct_paths_all_fields_from_item_vis_fragment() {
+        let test_pub_only = paths!(TestStructFromItemVisFragment::*);
+        assert_eq!(test_pub_only, ["value_str"]);
+
+        let test_all = paths!(TestStructFromItemVisFragment::*; visibility = "all");
+        assert_eq!(test_all, ["value_str"]);
     }
 }

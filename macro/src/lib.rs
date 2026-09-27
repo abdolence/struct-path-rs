@@ -120,13 +120,17 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
 
     let mut opened_struct = false;
     let mut colons_counter = 0;
+    let mut options_opened = false;
 
     let mut current_field_tokens: Vec<TokenTree> = Vec::new();
 
+    let mut current_option_name: Option<String> = None;
+    let mut expect_option_value: bool = false;
+
+    let mut options: HashMap<String, String> = HashMap::new();
     let mut found_structs: FoundStructs = Vec::new();
 
-    let mut struct_path_iter = struct_path_stream.into_iter();
-    for token_tree in struct_path_iter.by_ref() {
+    for token_tree in struct_path_stream.into_iter() {
         match token_tree {
             TokenTree::Ident(id) if current_struct_name_tokens.is_empty() => {
                 current_struct_name_tokens.push(TokenTree::Ident(id));
@@ -174,7 +178,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
             TokenTree::Group(group) if opened_struct && current_field_tokens.is_empty() => {
                 parse_multiple_fields(group.stream(), &mut current_struct_fields)?
             }
-            TokenTree::Punct(punct) if opened_struct && punct == ',' => {
+            TokenTree::Punct(punct) if !options_opened && opened_struct && punct == ',' => {
                 opened_struct = false;
                 colons_counter = 0;
                 if current_struct_name_tokens.is_empty() {
@@ -194,10 +198,40 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                     std::mem::take(&mut current_struct_fields),
                 ));
             }
-            TokenTree::Punct(punct) if punct == ';' && opened_struct => {
-                // Everything after `;` is the options list, parsed in one
-                // pass below rather than token-by-token here.
-                break;
+            TokenTree::Punct(punct) if punct == ';' && opened_struct && !options_opened => {
+                options_opened = true;
+                opened_struct = false;
+            }
+            TokenTree::Ident(id) if options_opened && !expect_option_value => {
+                current_option_name = Some(id.to_string())
+            }
+            TokenTree::Ident(id) if options_opened && expect_option_value => {
+                expect_option_value = false;
+                match current_option_name.take() {
+                    Some(option_name) => {
+                        options.insert(option_name, id.to_string());
+                    }
+                    _ => {
+                        return Err("Wrong options format".to_string());
+                    }
+                }
+            }
+            TokenTree::Literal(lit) if options_opened && expect_option_value => {
+                expect_option_value = false;
+                match current_option_name.take() {
+                    Some(option_name) => {
+                        options.insert(option_name, unquote_literal(&lit)?);
+                    }
+                    _ => {
+                        return Err("Wrong options format".to_string());
+                    }
+                }
+            }
+            TokenTree::Punct(punct) if options_opened && punct == '=' => {
+                expect_option_value = true;
+            }
+            TokenTree::Punct(punct) if options_opened && punct == ',' => {
+                expect_option_value = false;
             }
             others => {
                 return Err(format!(
@@ -207,7 +241,6 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
             }
         }
     }
-    let options = parse_options(&struct_path_iter.collect::<Vec<_>>())?;
 
     if !current_field_tokens.is_empty() {
         current_struct_fields.push(std::mem::take(&mut current_field_tokens));
@@ -335,6 +368,18 @@ fn try_parse_all_fields(struct_path_stream: &TokenStream) -> Option<Result<Token
 /// the user to cross-check the result against.
 const ALL_FIELDS_OPTION_KEYS: &[&str] = &["visibility", "case"];
 
+/// Reported when the `*` sits beside a second struct or field group, whether
+/// before it (`B::y, A::*`) or after (`A::*, B::y`): the combined array's
+/// length would then be unknown to the macro.
+const CANNOT_COMBINE_STAR_MESSAGE: &str = "`Type::*` cannot be combined with another struct or field group: its length is unknown to the macro";
+
+/// Reported when the type-name position is not a plain `Type::*` /
+/// `crate::module::Type::*` path and there is no comma marking a second
+/// group either -- generics on the type, a `Type::<'a>::*` turbofish, a
+/// `$t:ty` macro fragment, or a stray trailing separator.
+const EXPECTED_TYPE_PATH_MESSAGE: &str =
+    "expected a type path such as `Type::*` or `crate::module::Type::*`";
+
 fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStream, String> {
     if star_pos < 2
         || !matches!(&tokens[star_pos - 1], TokenTree::Punct(p) if *p == ':')
@@ -349,14 +394,15 @@ fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStr
     if !is_bare_type_path(type_tokens) {
         // A second `Type::field` or `Type::*` group before this one folds
         // into `type_tokens` rather than being rejected outright, since
-        // nothing here stops at the group's own `,`; catching that shape
-        // now, before it is spliced into the generated code, keeps a
-        // star-last combination (`B::y, A::*`) from producing the same
-        // broken code a star-first combination already refuses.
-        return Err(
-            "`Type::*` cannot be combined with another struct or field group: its length is unknown to the macro"
-                .to_string(),
-        );
+        // nothing here stops at the group's own `,`; a top-level comma is
+        // what tells that shape apart from a type path that is simply
+        // malformed on its own (generics, a turbofish, a macro fragment),
+        // which gets the other message instead.
+        return Err(if contains_top_level_comma(type_tokens) {
+            CANNOT_COMBINE_STAR_MESSAGE.to_string()
+        } else {
+            EXPECTED_TYPE_PATH_MESSAGE.to_string()
+        });
     }
     let star_span = match &tokens[star_pos] {
         TokenTree::Punct(p) => p.span(),
@@ -365,28 +411,35 @@ fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStr
 
     let rest = &tokens[star_pos + 1..];
     let options = match rest {
-        [] => HashMap::new(),
-        [TokenTree::Punct(p), remainder @ ..] if *p == ';' => parse_options(remainder)?,
-        _ => {
-            return Err(
-                "`Type::*` cannot be combined with another struct or field group: its length is unknown to the macro"
-                    .to_string(),
-            )
+        [] => Vec::new(),
+        [TokenTree::Punct(p), remainder @ ..] if *p == ';' => parse_all_fields_options(remainder)?,
+        // A second group after the `*` (`A::*, B::y`) is the same unknown-
+        // length combination as one before it; a lone trailing comma with
+        // nothing following it is not a second group, just malformed input.
+        [TokenTree::Punct(p), more @ ..] if *p == ',' && !more.is_empty() => {
+            return Err(CANNOT_COMBINE_STAR_MESSAGE.to_string())
         }
+        _ => return Err(EXPECTED_TYPE_PATH_MESSAGE.to_string()),
     };
-    if let Some(unknown) = options
-        .keys()
-        .find(|key| !ALL_FIELDS_OPTION_KEYS.contains(&key.as_str()))
+    if let Some((unknown, _)) = options
+        .iter()
+        .find(|(key, _)| !ALL_FIELDS_OPTION_KEYS.contains(&key.as_str()))
     {
         return Err(format!("Unknown option is specified: {}", unknown));
     }
 
-    let visibility_suffix = match options.get("visibility").map(String::as_str) {
+    let option_value = |name: &str| {
+        options
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let visibility_suffix = match option_value("visibility") {
         None | Some("pub") => "PUB",
         Some("all") => "ALL",
         Some(other) => return Err(format!("Unknown visibility is specified: {}", other)),
     };
-    let case_suffix = match options.get("case").map(String::as_str) {
+    let case_suffix = match option_value("case") {
         None => "",
         Some("camel") => "_CAMEL",
         Some("pascal") => "_PASCAL",
@@ -401,14 +454,28 @@ fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStr
     Ok(fill(&const_path, star_span, &[("TYPE", &type_stream)]))
 }
 
-/// Reports whether `tokens` is a bare type path -- one or more identifiers
-/// joined by `::` and nothing else. `Type::*`'s type name must be exactly
-/// this shape; anything wider (a trailing field group, a second `Type::*`
-/// group, stray punctuation) means a second struct or field group slipped in
-/// before the `*` and folded into what should have been rejected as
-/// "cannot be combined", rather than spliced into the generated code.
+/// Whether `tokens` contains a `,` at the top level -- the mark of a second
+/// struct or field group folded in beside `Type::*`, as opposed to a type
+/// path that is simply malformed on its own.
+fn contains_top_level_comma(tokens: &[TokenTree]) -> bool {
+    tokens
+        .iter()
+        .any(|t| matches!(t, TokenTree::Punct(p) if *p == ','))
+}
+
+/// Reports whether `tokens` is a bare type path -- an optional leading `::`
+/// followed by one or more identifiers joined by `::`, and nothing else.
+/// `Type::*`'s type name must be exactly this shape; anything wider (a
+/// trailing field group, a second `Type::*` group, generics, stray
+/// punctuation) is rejected by the caller before it is spliced into the
+/// generated code.
 fn is_bare_type_path(tokens: &[TokenTree]) -> bool {
     let mut i = 0;
+    if matches!(tokens.first(), Some(TokenTree::Punct(p)) if *p == ':')
+        && matches!(tokens.get(1), Some(TokenTree::Punct(p)) if *p == ':')
+    {
+        i = 2;
+    }
     loop {
         if !matches!(tokens.get(i), Some(TokenTree::Ident(_))) {
             return false;
@@ -426,43 +493,43 @@ fn is_bare_type_path(tokens: &[TokenTree]) -> bool {
     }
 }
 
-/// Parses the shared `key = value, key = value, ...` option grammar used
-/// after a path or field list's `;` and after `Type::*;`. A bare `key` with
-/// no `= value` is accepted by the token grammar but never recorded into
-/// `options`, matching every call site's behavior today; extending this to
-/// record a bare flag only touches this one function.
-fn parse_options(tokens: &[TokenTree]) -> Result<HashMap<String, String>, String> {
-    let mut options: HashMap<String, String> = HashMap::new();
-    let mut current_option_name: Option<String> = None;
-    let mut expect_option_value = false;
+/// Parses the `key = value, key = value, ...` option grammar accepted after
+/// `Type::*;`, keeping source order so the caller can report the first
+/// unknown key as written rather than in a hash map's arbitrary order. This
+/// parser is only for `Type::*`: `path!`/`paths!`'s own option grammar is
+/// parsed inline in their own loops, unchanged, because it has a field list
+/// to cross-check its result against and a different tolerance for
+/// malformed input; `Type::*` has no such field list, so a bare key with no
+/// `= value` is always an error here.
+fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)>, String> {
+    let mut options: Vec<(String, String)> = Vec::new();
+    let mut pending_key: Option<String> = None;
+    let mut expect_value = false;
     for token_tree in tokens {
         match token_tree {
-            TokenTree::Ident(id) if !expect_option_value => {
-                current_option_name = Some(id.to_string());
-            }
-            TokenTree::Ident(id) if expect_option_value => {
-                expect_option_value = false;
-                match current_option_name.take() {
-                    Some(name) => {
-                        options.insert(name, id.to_string());
-                    }
-                    None => return Err("Wrong options format".to_string()),
+            TokenTree::Ident(id) if !expect_value => {
+                if let Some(key) = pending_key.take() {
+                    return Err(format!("Missing a value for option `{}`", key));
                 }
+                pending_key = Some(id.to_string());
             }
-            TokenTree::Literal(lit) if expect_option_value => {
-                expect_option_value = false;
-                match current_option_name.take() {
-                    Some(name) => {
-                        options.insert(name, unquote_literal(lit)?);
-                    }
-                    None => return Err("Wrong options format".to_string()),
+            TokenTree::Punct(p) if *p == '=' && pending_key.is_some() => {
+                expect_value = true;
+            }
+            TokenTree::Ident(id) if expect_value => {
+                let key = pending_key.take().expect("set when '=' was seen");
+                options.push((key, id.to_string()));
+                expect_value = false;
+            }
+            TokenTree::Literal(lit) if expect_value => {
+                let key = pending_key.take().expect("set when '=' was seen");
+                options.push((key, unquote_literal(lit)?));
+                expect_value = false;
+            }
+            TokenTree::Punct(p) if *p == ',' && !expect_value => {
+                if let Some(key) = pending_key.take() {
+                    return Err(format!("Missing a value for option `{}`", key));
                 }
-            }
-            TokenTree::Punct(p) if *p == '=' => {
-                expect_option_value = true;
-            }
-            TokenTree::Punct(p) if *p == ',' => {
-                expect_option_value = false;
             }
             other => {
                 return Err(format!(
@@ -471,6 +538,9 @@ fn parse_options(tokens: &[TokenTree]) -> Result<HashMap<String, String>, String
                 ))
             }
         }
+    }
+    if let Some(key) = pending_key {
+        return Err(format!("Missing a value for option `{}`", key));
     }
     Ok(options)
 }
@@ -500,13 +570,17 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
 
     let mut opened_struct = false;
     let mut colons_counter = 0;
+    let mut options_opened = false;
 
     let mut current_field_tokens: Vec<TokenTree> = Vec::new();
 
+    let mut current_option_name: Option<String> = None;
+    let mut expect_option_value: bool = false;
+
+    let mut options: HashMap<String, String> = HashMap::new();
     let mut found_structs: FoundStructs = Vec::new();
 
-    let mut struct_path_iter = struct_path_stream.into_iter();
-    for token_tree in struct_path_iter.by_ref() {
+    for token_tree in struct_path_stream.into_iter() {
         match token_tree {
             TokenTree::Ident(id) if current_struct_name_tokens.is_empty() => {
                 current_struct_name_tokens.push(TokenTree::Ident(id));
@@ -551,7 +625,7 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                 }
                 current_field_tokens.push(TokenTree::Punct(punct));
             }
-            TokenTree::Punct(punct) if opened_struct && punct == ',' => {
+            TokenTree::Punct(punct) if !options_opened && opened_struct && punct == ',' => {
                 opened_struct = false;
                 colons_counter = 0;
                 if current_struct_name_tokens.is_empty() {
@@ -568,10 +642,40 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                     vec![std::mem::take(&mut current_field_tokens)],
                 ));
             }
-            TokenTree::Punct(punct) if punct == ';' && opened_struct => {
-                // Everything after `;` is the options list, parsed in one
-                // pass below rather than token-by-token here.
-                break;
+            TokenTree::Punct(punct) if punct == ';' && opened_struct && !options_opened => {
+                options_opened = true;
+                opened_struct = false;
+            }
+            TokenTree::Ident(id) if options_opened && !expect_option_value => {
+                current_option_name = Some(id.to_string())
+            }
+            TokenTree::Ident(id) if options_opened && expect_option_value => {
+                expect_option_value = false;
+                match current_option_name.take() {
+                    Some(option_name) => {
+                        options.insert(option_name, id.to_string());
+                    }
+                    _ => {
+                        return Err("Wrong options format".to_string());
+                    }
+                }
+            }
+            TokenTree::Literal(lit) if options_opened && expect_option_value => {
+                expect_option_value = false;
+                match current_option_name.take() {
+                    Some(option_name) => {
+                        options.insert(option_name, unquote_literal(&lit)?);
+                    }
+                    _ => {
+                        return Err("Wrong options format".to_string());
+                    }
+                }
+            }
+            TokenTree::Punct(punct) if options_opened && punct == '=' => {
+                expect_option_value = true;
+            }
+            TokenTree::Punct(punct) if options_opened && punct == ',' => {
+                expect_option_value = false;
             }
             others => {
                 return Err(format!(
@@ -581,7 +685,6 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
             }
         }
     }
-    let options = parse_options(&struct_path_iter.collect::<Vec<_>>())?;
 
     if !current_struct_name_tokens.is_empty() && !current_field_tokens.is_empty() {
         found_structs.push((current_struct_name_tokens, vec![current_field_tokens]));
@@ -773,10 +876,9 @@ fn derive_struct_path_impl(input: TokenStream) -> Result<TokenStream, TokenStrea
     skip_attributes(&tokens, &mut pos);
 
     let visibility_start = pos;
-    let (vis_len, _) = parse_visibility_prefix(&tokens[pos..]);
+    let (vis_len, item_is_plain_pub) = parse_visibility_prefix(&tokens[pos..]);
     pos += vis_len;
     let visibility_tokens: TokenStream = tokens[visibility_start..pos].iter().cloned().collect();
-    let item_is_private = vis_len == 0;
 
     let (keyword, keyword_span) = match tokens.get(pos) {
         Some(TokenTree::Ident(id)) => (id.to_string(), id.span()),
@@ -840,35 +942,35 @@ fn derive_struct_path_impl(input: TokenStream) -> Result<TokenStream, TokenStrea
         .expect("a field count always parses as a literal");
 
     // `__STRUCT_PATH_ALL_FIELDS*` exposes every declared field's name,
-    // private ones included, so it is capped at `pub(crate)` regardless of
-    // the struct's own visibility: private stays private (nothing to leak
-    // beyond what the fields already are), but any wider visibility would
-    // otherwise let another crate read private field names through it, and
-    // would make adding a private field a breaking change to a `pub` array
-    // type. The `__STRUCT_PATH_PUB_FIELDS*` consts only ever list fields
-    // already visible outside the crate, so they keep the struct's own
-    // visibility.
-    let all_fields_visibility: TokenStream = if item_is_private {
-        TokenStream::new()
-    } else {
+    // private ones included. A plain `pub` struct's consts are capped to
+    // `pub(crate)`, so a downstream crate cannot read private field names
+    // through them and adding a private field is not a breaking change to a
+    // `pub` array type. Any other struct visibility -- private, `pub(crate)`,
+    // `pub(super)`, `pub(in ..)` -- reuses the struct's own visibility tokens
+    // instead, so these consts are never wider than the struct they describe.
+    // The `__STRUCT_PATH_PUB_FIELDS*` consts only ever list fields already
+    // visible outside the crate, so they keep the struct's own visibility
+    // unconditionally.
+    let all_fields_visibility: TokenStream = if item_is_plain_pub {
         "pub(crate)".parse().expect("`pub(crate)` always parses")
+    } else {
+        visibility_tokens.clone()
     };
 
     let generated = fill(
-        "#[allow(unreachable_pub, clippy::multiple_inherent_impl)]
-        impl<GENERICS_IMPL> NAME<GENERICS_TYPE> WHERE_CLAUSE {
+        "impl<GENERICS_IMPL> NAME<GENERICS_TYPE> WHERE_CLAUSE {
             #[doc(hidden)]
-            VIS const __STRUCT_PATH_PUB_FIELDS: [&'static ::core::primitive::str; N_PUB] = PUB_FIELDS;
+            VIS const __STRUCT_PATH_PUB_FIELDS: [&'static str; N_PUB] = PUB_FIELDS;
             #[doc(hidden)]
-            VIS const __STRUCT_PATH_PUB_FIELDS_CAMEL: [&'static ::core::primitive::str; N_PUB] = PUB_FIELDS_CAMEL;
+            VIS const __STRUCT_PATH_PUB_FIELDS_CAMEL: [&'static str; N_PUB] = PUB_FIELDS_CAMEL;
             #[doc(hidden)]
-            VIS const __STRUCT_PATH_PUB_FIELDS_PASCAL: [&'static ::core::primitive::str; N_PUB] = PUB_FIELDS_PASCAL;
+            VIS const __STRUCT_PATH_PUB_FIELDS_PASCAL: [&'static str; N_PUB] = PUB_FIELDS_PASCAL;
             #[doc(hidden)]
-            ALL_VIS const __STRUCT_PATH_ALL_FIELDS: [&'static ::core::primitive::str; N_ALL] = ALL_FIELDS;
+            ALL_VIS const __STRUCT_PATH_ALL_FIELDS: [&'static str; N_ALL] = ALL_FIELDS;
             #[doc(hidden)]
-            ALL_VIS const __STRUCT_PATH_ALL_FIELDS_CAMEL: [&'static ::core::primitive::str; N_ALL] = ALL_FIELDS_CAMEL;
+            ALL_VIS const __STRUCT_PATH_ALL_FIELDS_CAMEL: [&'static str; N_ALL] = ALL_FIELDS_CAMEL;
             #[doc(hidden)]
-            ALL_VIS const __STRUCT_PATH_ALL_FIELDS_PASCAL: [&'static ::core::primitive::str; N_ALL] = ALL_FIELDS_PASCAL;
+            ALL_VIS const __STRUCT_PATH_ALL_FIELDS_PASCAL: [&'static str; N_ALL] = ALL_FIELDS_PASCAL;
         }",
         name_span,
         &[
