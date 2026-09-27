@@ -65,7 +65,7 @@ let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
 
 - `delim = "<str>"`: sets the path separator, defaults to `.`;
 - `case = "camel"` or `case = "pascal"`: converts each segment to camelCase or PascalCase;
-- `~`: walks into an `Iter`-based type, such as `Option` or `Vec`, instead of `.`;
+- `~`: walks into a type with an `iter()` method, such as `Option` or `Vec`, instead of `.`;
 
 ## Licence
 Apache Software License (ASL)
