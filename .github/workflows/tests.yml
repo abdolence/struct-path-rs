@@ -1,16 +1,31 @@
 name: tests & formatting
-on: 
+on:
   push:
   pull_request:
-    types: [opened]  
+    types: [ opened ]
+  workflow_dispatch:
+  schedule:
+    # Cargo.lock is not committed, so a weekly run picks up the newest stable Rust and compatible deps
+    - cron: '0 6 * * 1'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: stable
           components: rustfmt, clippy
-      - run: cargo fmt -- --check && cargo clippy -- -Dwarnings && cargo test
+      - name: 'Checking formatting'
+        run: cargo fmt --all -- --check
+      - name: 'Checking clippy'
+        run: cargo clippy --workspace --all-targets -- -Dwarnings
+      - name: 'Checking documentation'
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
+      - name: 'Run tests'
+        run: cargo test --workspace
