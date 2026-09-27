@@ -269,6 +269,12 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
             TokenTree::Punct(punct) if options_opened && punct == ',' => {
                 expect_option_value = false;
             }
+            // A second (or later) `;` starts another options group; treated
+            // exactly like `,`, so a wrapper macro can append its own group
+            // after the caller's own options without the two colliding.
+            TokenTree::Punct(punct) if options_opened && punct == ';' => {
+                expect_option_value = false;
+            }
             others => {
                 return Err(format!(
                     "Unexpected input for struct path parameters: {:?}",
@@ -947,6 +953,16 @@ fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)
             (OptionParseState::CommaOrEnd, TokenTree::Punct(p)) if *p == ',' => {
                 OptionParseState::Key
             }
+            // A `;` starts a new options group, exactly like `,` starts a
+            // new pair, so a wrapper macro can append its own group after
+            // the caller's without the two colliding. The caller already
+            // strips the one `;` that opens the first group, so a `;` seen
+            // here in `Key` state is a second one immediately following --
+            // an empty group -- rather than the first.
+            (OptionParseState::CommaOrEnd, TokenTree::Punct(p)) if *p == ';' => {
+                OptionParseState::Key
+            }
+            (OptionParseState::Key, TokenTree::Punct(p)) if *p == ';' => OptionParseState::Key,
             (state, other) => {
                 let expected = match state {
                     OptionParseState::Key => "an option name",
@@ -1112,6 +1128,12 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                 expect_option_value = true;
             }
             TokenTree::Punct(punct) if options_opened && punct == ',' => {
+                expect_option_value = false;
+            }
+            // A second (or later) `;` starts another options group; treated
+            // exactly like `,`, so a wrapper macro can append its own group
+            // after the caller's own options without the two colliding.
+            TokenTree::Punct(punct) if options_opened && punct == ';' => {
                 expect_option_value = false;
             }
             others => {

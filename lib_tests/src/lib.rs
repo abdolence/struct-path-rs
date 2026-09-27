@@ -357,6 +357,108 @@ mod tests {
             ["valueStr", "valueNum"]
         );
         assert_eq!(camel_paths!(StarChild::*), ["a", "b"]);
+
+        // The wrapper appends its own group after one the caller already
+        // supplied, rather than being the caller's only group.
+        assert_eq!(
+            camel_paths!(TestStructMixedVisibility::*; visibility = "all"),
+            ["valueStr", "valueCrate", "valuePrivate"]
+        );
+    }
+
+    #[test]
+    fn camel_wrapper_appends_after_caller_options_past_forty_dotted_paths() {
+        // struct-path's own field-list parser is one iterative loop over the
+        // input tokens, not a recursive `macro_rules!` muncher, so it has no
+        // recursion-limit ceiling on how many comma-separated dotted paths one
+        // call can hold -- unlike a hand-rolled recursive wrapper, which hits
+        // the compiler's default limit around 21.
+        let result = camel_paths!(
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str,
+            TestStructParent::value_child.child_value_str;
+            delim = "/"
+        );
+        assert_eq!(result.len(), 45);
+        assert!(result.iter().all(|p| *p == "valueChild/childValueStr"));
+    }
+
+    #[test]
+    fn repeated_option_groups() {
+        // `path!`: which group holds which key does not matter for merging.
+        assert_eq!(
+            path!(TestStructParent::value_child.child_value_str; case = "camel"; delim = "/"),
+            "valueChild/childValueStr"
+        );
+
+        // `paths!` with a `{}` field group.
+        assert_eq!(
+            paths!(TestStructParent::{ value_child.child_value_str }; delim = "/"; case = "camel"),
+            ["valueChild/childValueStr"]
+        );
+
+        // Strict `Type::*`.
+        assert_eq!(
+            paths!(TestStructMixedVisibility::*; visibility = "all"; case = "camel"),
+            ["valueStr", "valueCrate", "valuePrivate"]
+        );
+
+        // Nested `Type::*`, split across two groups instead of one.
+        assert_eq!(
+            paths!(StarParent::opt_child~(StarChild::*); delim = "/"; case = "camel"),
+            ["optChild/a", "optChild/b"]
+        );
+
+        // Empty groups: a trailing `;` and `;;`, for the lenient and the
+        // strict/nested forms alike.
+        assert_eq!(path!(TestStructParent::value_str;;), "value_str");
+        assert_eq!(paths!(TestStructAllFields::*;;), ["value_str", "value_num"]);
+        assert_eq!(
+            paths!(StarParent::child.(StarChild::*);;),
+            ["child.a", "child.b"]
+        );
     }
 
     #[test]
