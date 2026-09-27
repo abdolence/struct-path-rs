@@ -37,7 +37,6 @@ pub struct TestStructParent {
     pub opt_value_child: Option<TestStructChild>,
 }
 
-#[derive(StructPath)]
 pub struct TestStructChild {
     pub child_value_str: String,
     pub child_value_num: u64,
@@ -61,6 +60,16 @@ let s5: &str = path!(TestStructParent::value_child.child_value_str; delim="/", c
 // returns ["value_str", "value_num"]
 let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
 
+
+```
+
+## All fields with `Type::*`
+
+`#[derive(StructPath)]` is only needed for `Type::*`; none of the calls above need it.
+
+```rust
+use struct_path::*;
+
 #[derive(StructPath)]
 pub struct TestStructWithPrivate {
     pub value_str: String,
@@ -73,6 +82,17 @@ let pub_only: [&str; 1] = paths!(TestStructWithPrivate::*);
 // returns ["value_str", "value_internal"], every declared field
 let all_fields: [&str; 2] = paths!(TestStructWithPrivate::*; visibility="all");
 
+#[derive(StructPath)]
+pub struct TestStructChild {
+    pub child_value_str: String,
+    pub child_value_num: u64,
+}
+
+pub struct TestStructParent {
+    pub value_child: TestStructChild,
+    pub opt_value_child: Option<TestStructChild>,
+}
+
 // nested `Type::*`: `TestStructChild` also needs `#[derive(StructPath)]`, and
 // is named again inside the parens; returns
 // ["value_child.child_value_str", "value_child.child_value_num"]
@@ -84,7 +104,7 @@ let nested_opt: [&str; 2] = paths!(TestStructParent::opt_value_child~(TestStruct
 
 ```
 
-`Type::*` needs `#[derive(StructPath)]` on `Type`; without it there is no field list for the macro to return. Nesting it under a field path takes the same requirement: name the inner type again inside the parens, and derive it too.
+Nesting `Type::*` under a field path takes the same requirement: name the inner type again inside the parens, and derive it too.
 
 ### Lint gates on the derive
 

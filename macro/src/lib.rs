@@ -26,7 +26,6 @@
 //!     pub opt_value_child: Option<TestStructChild>,
 //! }
 //!
-//! #[derive(StructPath)]
 //! pub struct TestStructChild {
 //!     pub child_value_str: String,
 //!     pub child_value_num: u64,
@@ -51,6 +50,17 @@
 //!// returns ["value_str", "value_num"]
 //!let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
 //!
+//! }
+//!
+//! ```
+//!
+//! All fields with `Type::*`, needing `#[derive(StructPath)]`; none of the calls above need it.
+//!
+//! ```rust,no_run
+//! use struct_path::*;
+//!
+//! fn example_all_fields() {
+//!
 //! #[derive(StructPath)]
 //! pub struct TestStructWithPrivate {
 //!     pub value_str: String,
@@ -63,6 +73,17 @@
 //!
 //!// `visibility="all"` returns every declared field instead
 //!let all_fields: [&str; 2] = paths!(TestStructWithPrivate::*; visibility="all");
+//!
+//! #[derive(StructPath)]
+//! pub struct TestStructChild {
+//!     pub child_value_str: String,
+//!     pub child_value_num: u64,
+//! }
+//!
+//! pub struct TestStructParent {
+//!     pub value_child: TestStructChild,
+//!     pub opt_value_child: Option<TestStructChild>,
+//! }
 //!
 //!// nested `Type::*`: `TestStructChild` also needs `#[derive(StructPath)]`,
 //!// and is named again inside the parens; returns
