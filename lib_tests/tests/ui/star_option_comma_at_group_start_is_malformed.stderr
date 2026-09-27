@@ -1,4 +1,4 @@
-error: Expected an option name in `Type::*` options, found `,`
+error: Expected an option name or `;` in `Type::*` options, found `,`
  --> tests/ui/star_option_comma_at_group_start_is_malformed.rs:9:13
   |
 9 |     let _ = paths!(TestStruct::*; visibility = "all"; , case = "camel");

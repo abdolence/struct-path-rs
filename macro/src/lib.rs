@@ -919,14 +919,17 @@ fn is_bare_type_path(tokens: &[TokenTree]) -> bool {
 /// so this parser accepts nothing looser: no bare key, no unquoted value, no
 /// two pairs run together without a separator, no `,` at a group's start,
 /// and no key repeated with a different value, whether within one group or
-/// across groups. A trailing `,` may end a group, including just before the
-/// next `;`, since a wrapper macro appending `; key = "value"` cannot see
-/// whether its caller wrote one.
+/// across groups. Values are compared as the text written between the
+/// quotes, with escapes left undecoded: `"/"` and `'/'` are the same value,
+/// while `"/"` and `"\x2f"` are different and give the duplicate error. A
+/// trailing `,` may end a group, including just before the next `;`, since a
+/// wrapper macro appending `; key = "value"` cannot see whether its caller
+/// wrote one.
 enum OptionParseState {
     /// At the start of a group, where a `;` closes it as an empty group.
     GroupStart,
-    /// After a `,`, where an option name or the `;` opening the next group
-    /// may follow, but not another `,`.
+    /// After a `,`, where an option name, the `;` opening the next group or
+    /// the end of input may follow, but not another `,`.
     Key,
     Equals,
     Value,
@@ -939,7 +942,8 @@ enum OptionParseState {
 /// Keeps source order so the caller can report the first unknown key as
 /// written rather than in a hash map's arbitrary order. A key repeated later
 /// in the options, in the same group or a later one, is accepted only with
-/// the same value: a wrapper that appends `case = "camel"` must still compile
+/// the same value, compared as written between the quotes with escapes left
+/// undecoded: a wrapper that appends `case = "camel"` must still compile
 /// when its caller wrote the same option, while two different values are
 /// rejected rather than one silently winning.
 fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)>, String> {
@@ -977,7 +981,7 @@ fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)
             ) if *p == ';' => OptionParseState::GroupStart,
             (state, other) => {
                 let expected = match state {
-                    OptionParseState::GroupStart | OptionParseState::Key => "an option name",
+                    OptionParseState::GroupStart | OptionParseState::Key => "an option name or `;`",
                     OptionParseState::Equals => "`=`",
                     OptionParseState::Value => "a quoted string (\"...\") or char ('.') literal",
                     OptionParseState::CommaOrEnd => "`,` or `;`",

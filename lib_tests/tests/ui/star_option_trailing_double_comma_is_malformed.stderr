@@ -1,0 +1,7 @@
+error: Expected an option name or `;` in `Type::*` options, found `,`
+ --> tests/ui/star_option_trailing_double_comma_is_malformed.rs:9:13
+  |
+9 |     let _ = paths!(TestStruct::*; visibility = "all",,);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)
