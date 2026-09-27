@@ -1,0 +1,7 @@
+error: StructPath supports structs with named fields only, not tuple structs
+ --> tests/ui/derive_on_tuple_struct.rs:3:10
+  |
+3 | #[derive(StructPath)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `StructPath` (in Nightly builds, run with -Z macro-backtrace for more info)

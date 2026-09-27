@@ -1,0 +1,7 @@
+error: Unknown visibility is specified: bogus
+ --> tests/ui/bogus_visibility.rs:9:13
+  |
+9 |     let _ = paths!(TestStruct::*; visibility = "bogus");
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)
