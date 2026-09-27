@@ -428,6 +428,23 @@ fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStr
         return Err(format!("Unknown option is specified: {}", unknown));
     }
 
+    let (visibility_suffix, case_suffix) = names_const_suffixes(&options)?;
+
+    let const_path = format!(
+        "TYPE::__STRUCT_PATH_{}_FIELDS{}",
+        visibility_suffix, case_suffix
+    );
+    let type_stream: TokenStream = type_tokens.iter().cloned().collect();
+    Ok(fill(&const_path, star_span, &[("TYPE", &type_stream)]))
+}
+
+/// Picks the `__STRUCT_PATH_{PUB|ALL}_FIELDS[_CAMEL|_PASCAL]` const suffix
+/// pair named by a `Type::*` call's `visibility`/`case` options, shared by
+/// the bare and nested forms so the two can never disagree on what a given
+/// option value selects.
+fn names_const_suffixes(
+    options: &[(String, String)],
+) -> Result<(&'static str, &'static str), String> {
     let option_value = |name: &str| {
         options
             .iter()
@@ -445,22 +462,17 @@ fn parse_all_fields_at(tokens: &[TokenTree], star_pos: usize) -> Result<TokenStr
         Some("pascal") => "_PASCAL",
         Some(other) => return Err(format!("Unknown case is specified: {}", other)),
     };
-
-    let const_path = format!(
-        "TYPE::__STRUCT_PATH_{}_FIELDS{}",
-        visibility_suffix, case_suffix
-    );
-    let type_stream: TokenStream = type_tokens.iter().cloned().collect();
-    Ok(fill(&const_path, star_span, &[("TYPE", &type_stream)]))
+    Ok((visibility_suffix, case_suffix))
 }
 
 /// Whether `tokens` contains a `,` at the top level -- the mark of a second
 /// struct or field group folded in beside `Type::*`, as opposed to a type
-/// path that is simply malformed on its own.
+/// path that is simply malformed on its own. Depth-aware over `<...>`, so a
+/// generic parameter list's own comma (`S<'a, 'b>::*`) is not mistaken for
+/// one, the same depth tracking `split_top_level_commas` uses for a field's
+/// generic type.
 fn contains_top_level_comma(tokens: &[TokenTree]) -> bool {
-    tokens
-        .iter()
-        .any(|t| matches!(t, TokenTree::Punct(p) if *p == ','))
+    split_top_level_commas(tokens).len() > 1
 }
 
 /// Reports whether `tokens` is a bare type path -- an optional leading `::`
@@ -493,56 +505,71 @@ fn is_bare_type_path(tokens: &[TokenTree]) -> bool {
     }
 }
 
-/// Parses the `key = value, key = value, ...` option grammar accepted after
-/// `Type::*;`, keeping source order so the caller can report the first
-/// unknown key as written rather than in a hash map's arbitrary order. This
-/// parser is only for `Type::*`: `path!`/`paths!`'s own option grammar is
-/// parsed inline in their own loops, unchanged, because it has a field list
-/// to cross-check its result against and a different tolerance for
-/// malformed input; `Type::*` has no such field list, so a bare key with no
-/// `= value` is always an error here.
+/// The one grammar `Type::*;` options accept: `key = "value"` pairs
+/// separated by `,`, each value a quoted string or char literal. Unlike
+/// `path!`/`paths!`'s own option grammar -- parsed inline in their own
+/// loops, with a field list to cross-check its result against and a looser
+/// tolerance for malformed input -- `Type::*` has no such field list, so
+/// this parser accepts nothing looser: no bare key, no unquoted value, no
+/// two pairs run together without a comma, and no key repeated.
+enum OptionParseState {
+    Key,
+    Equals,
+    Value,
+    CommaOrEnd,
+}
+
+/// Parses the `key = "value", key = "value", ...` option grammar accepted
+/// after `Type::*;` (and, for the nested `Type::*` form, after the closing
+/// `)`). Keeps source order so the caller can report the first unknown key
+/// as written rather than in a hash map's arbitrary order, and rejects a
+/// key repeated later in the same list rather than silently keeping
+/// whichever value a lookup finds first.
 fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)>, String> {
     let mut options: Vec<(String, String)> = Vec::new();
     let mut pending_key: Option<String> = None;
-    let mut expect_value = false;
+    let mut state = OptionParseState::Key;
+
     for token_tree in tokens {
-        match token_tree {
-            TokenTree::Ident(id) if !expect_value => {
-                if let Some(key) = pending_key.take() {
-                    return Err(format!("Missing a value for option `{}`", key));
-                }
+        state = match (state, token_tree) {
+            (OptionParseState::Key, TokenTree::Ident(id)) => {
                 pending_key = Some(id.to_string());
+                OptionParseState::Equals
             }
-            TokenTree::Punct(p) if *p == '=' && pending_key.is_some() => {
-                expect_value = true;
-            }
-            TokenTree::Ident(id) if expect_value => {
-                let key = pending_key.take().expect("set when '=' was seen");
-                options.push((key, id.to_string()));
-                expect_value = false;
-            }
-            TokenTree::Literal(lit) if expect_value => {
-                let key = pending_key.take().expect("set when '=' was seen");
-                options.push((key, unquote_literal(lit)?));
-                expect_value = false;
-            }
-            TokenTree::Punct(p) if *p == ',' && !expect_value => {
-                if let Some(key) = pending_key.take() {
-                    return Err(format!("Missing a value for option `{}`", key));
+            (OptionParseState::Equals, TokenTree::Punct(p)) if *p == '=' => OptionParseState::Value,
+            (OptionParseState::Value, TokenTree::Literal(lit)) => {
+                let key = pending_key.take().expect("set on entering Equals/Value");
+                if options.iter().any(|(existing, _)| existing == &key) {
+                    return Err(format!("Duplicate option is specified: {}", key));
                 }
+                options.push((key, unquote_literal(lit)?));
+                OptionParseState::CommaOrEnd
             }
-            other => {
+            (OptionParseState::CommaOrEnd, TokenTree::Punct(p)) if *p == ',' => {
+                OptionParseState::Key
+            }
+            (state, other) => {
+                let expected = match state {
+                    OptionParseState::Key => "an option name",
+                    OptionParseState::Equals => "`=`",
+                    OptionParseState::Value => "a quoted string (\"...\") or char ('.') literal",
+                    OptionParseState::CommaOrEnd => "`,`",
+                };
                 return Err(format!(
-                    "Unexpected input for struct path parameters: {:?}",
-                    other
-                ))
+                    "Expected {} in `Type::*` options, found `{}`",
+                    expected, other
+                ));
             }
-        }
+        };
     }
-    if let Some(key) = pending_key {
-        return Err(format!("Missing a value for option `{}`", key));
+
+    match state {
+        OptionParseState::Key | OptionParseState::CommaOrEnd => Ok(options),
+        OptionParseState::Equals | OptionParseState::Value => Err(format!(
+            "Missing a value for option `{}`",
+            pending_key.expect("set on entering Equals/Value")
+        )),
     }
-    Ok(options)
 }
 
 #[proc_macro]

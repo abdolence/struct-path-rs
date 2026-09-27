@@ -75,6 +75,15 @@ let all_fields: [&str; 2] = paths!(TestStructWithPrivate::*; visibility="all");
 
 `Type::*` needs `#[derive(StructPath)]` on `Type`; without it there is no field list for the macro to return.
 
+### Lint gates on the derive
+
+`#[derive(StructPath)]` reuses the struct's own visibility for the generated consts:
+
+- a `pub` struct in a private module trips `#![deny(unreachable_pub)]` on those consts too, and an `#[allow]` on the struct does not reach them;
+- a struct with its own `impl` block fails `#![deny(clippy::multiple_inherent_impl)]`, since the derive adds one more.
+
+Workaround: declare the struct `pub(crate)`, or add the `#[allow]` at module level instead of on the struct. The derive never emits the `#[allow]` itself, since that would break a crate using `#[forbid(...)]` instead of `#[deny(...)]`.
+
 ## Options
 
 - `delim = "<str>"`: sets the path separator, defaults to `.`;
