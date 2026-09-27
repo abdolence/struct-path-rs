@@ -7,11 +7,11 @@ license = "Apache-2.0"
 description = "A helper macros to build a string that represents struct fields path at compile time (such as <field-name>.<field-name>)"
 homepage = "https://github.com/abdolence/struct-path-rs"
 repository = "https://github.com/abdolence/struct-path-rs"
-documentation = "https://github.com/abdolence/struct-path-rs"
+documentation = "https://docs.rs/struct-path"
 keywords = ["struct", "path", "json"]
 categories = ["rust-patterns"]
 readme = "../README.md"
-include = ["Cargo.toml", "src/**/*.rs", "../README.md", "../LICENSE"]
+include = ["Cargo.toml", "src/**/*.rs", "LICENSE"]
 
 [lib]
 name = "struct_path"

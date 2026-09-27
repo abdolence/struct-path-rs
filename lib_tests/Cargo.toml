@@ -2,7 +2,7 @@
 name = "struct-path-tests"
 version = "0.1.4-alpha.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
-edition = "2018"
+edition = "2021"
 license = "Apache-2.0"
 description = "Tests for macros implementation"
 homepage = "https://github.com/abdolence/struct-path-rs"
