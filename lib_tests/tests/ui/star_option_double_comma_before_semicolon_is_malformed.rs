@@ -6,5 +6,5 @@ struct TestStruct {
 }
 
 fn main() {
-    let _ = paths!(TestStruct::*; visibility = "all", ;);
+    let _ = paths!(TestStruct::*; visibility = "all", , ;);
 }

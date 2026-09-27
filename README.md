@@ -121,7 +121,7 @@ Workaround: declare the struct `pub(crate)`, or add the `#[allow]` at module lev
 - `case = "camel"` or `case = "pascal"`: converts each segment to camelCase or PascalCase;
 - `~`: walks into a type with an `iter()` method, such as `Option` or `Vec`, instead of `.`;
 - `visibility = "all"`: with `Type::*`, returns every declared field instead of only the ones declared plain `pub`;
-- Several `;` groups are accepted, so a wrapper macro can append its own options; a key repeated across groups takes the last value in a field list and is a compile error with `Type::*`;
+- Several `;` groups are accepted, so a wrapper macro can append its own options. A trailing `,` may end a group before the next `;`. A key repeated in the same group or a later one takes the last value in a field list, while `Type::*` accepts it only with the same value;
 
 ## Licence
 Apache Software License (ASL)

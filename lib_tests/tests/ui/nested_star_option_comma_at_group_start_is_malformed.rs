@@ -10,5 +10,5 @@ struct Parent {
 }
 
 fn main() {
-    let _ = paths!(Parent::child.(Child::*); visibility = "all", ;);
+    let _ = paths!(Parent::child.(Child::*); visibility = "all"; , case = "camel");
 }

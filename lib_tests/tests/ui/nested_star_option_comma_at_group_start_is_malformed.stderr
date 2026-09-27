@@ -1,0 +1,7 @@
+error: Expected an option name or `;` in `Type::*` options, found `,`
+  --> tests/ui/nested_star_option_comma_at_group_start_is_malformed.rs:13:13
+   |
+13 |     let _ = paths!(Parent::child.(Child::*); visibility = "all"; , case = "camel");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)
