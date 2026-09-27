@@ -917,12 +917,16 @@ fn is_bare_type_path(tokens: &[TokenTree]) -> bool {
 /// own loops, with a field list to cross-check its result against and a
 /// looser tolerance for malformed input -- `Type::*` has no such field list,
 /// so this parser accepts nothing looser: no bare key, no unquoted value, no
-/// two pairs run together without a separator, no `;` straight after a `,`,
-/// and no key repeated, whether within one group or across groups.
+/// two pairs run together without a separator, no `,` at a group's start,
+/// and no key repeated with a different value, whether within one group or
+/// across groups. A trailing `,` may end a group, including just before the
+/// next `;`, since a wrapper macro appending `; key = "value"` cannot see
+/// whether its caller wrote one.
 enum OptionParseState {
     /// At the start of a group, where a `;` closes it as an empty group.
     GroupStart,
-    /// After a `,`, where only an option name may follow.
+    /// After a `,`, where an option name or the `;` opening the next group
+    /// may follow, but not another `,`.
     Key,
     Equals,
     Value,
@@ -933,9 +937,11 @@ enum OptionParseState {
 /// accepted after `Type::*;` (and, for the nested `Type::*` form, after the
 /// closing `)`). `tokens` starts after the `;` that opens the first group.
 /// Keeps source order so the caller can report the first unknown key as
-/// written rather than in a hash map's arbitrary order, and rejects a key
-/// repeated later in the options, in the same group or a later one, rather
-/// than silently keeping whichever value a lookup finds first.
+/// written rather than in a hash map's arbitrary order. A key repeated later
+/// in the options, in the same group or a later one, is accepted only with
+/// the same value: a wrapper that appends `case = "camel"` must still compile
+/// when its caller wrote the same option, while two different values are
+/// rejected rather than one silently winning.
 fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)>, String> {
     let mut options: Vec<(String, String)> = Vec::new();
     let mut pending_key: Option<String> = None;
@@ -950,10 +956,12 @@ fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)
             (OptionParseState::Equals, TokenTree::Punct(p)) if *p == '=' => OptionParseState::Value,
             (OptionParseState::Value, TokenTree::Literal(lit)) => {
                 let key = pending_key.take().expect("set on entering Equals/Value");
-                if options.iter().any(|(existing, _)| existing == &key) {
-                    return Err(format!("Duplicate option is specified: {}", key));
+                let value = unquote_literal(lit)?;
+                match options.iter().find(|(existing, _)| existing == &key) {
+                    Some((_, existing_value)) if *existing_value == value => {}
+                    Some(_) => return Err(format!("Duplicate option is specified: {}", key)),
+                    None => options.push((key, value)),
                 }
-                options.push((key, unquote_literal(lit)?));
                 OptionParseState::CommaOrEnd
             }
             (OptionParseState::CommaOrEnd, TokenTree::Punct(p)) if *p == ',' => {
@@ -961,13 +969,12 @@ fn parse_all_fields_options(tokens: &[TokenTree]) -> Result<Vec<(String, String)
             }
             // Later groups exist so a wrapper macro can append its own
             // options after the caller's. They share one key space with the
-            // first group: a key repeated in a later group is still a
-            // duplicate, not an override.
-            (OptionParseState::CommaOrEnd | OptionParseState::GroupStart, TokenTree::Punct(p))
-                if *p == ';' =>
-            {
-                OptionParseState::GroupStart
-            }
+            // first group: a key repeated in a later group with a different
+            // value is still a duplicate, not an override.
+            (
+                OptionParseState::CommaOrEnd | OptionParseState::GroupStart | OptionParseState::Key,
+                TokenTree::Punct(p),
+            ) if *p == ';' => OptionParseState::GroupStart,
             (state, other) => {
                 let expected = match state {
                     OptionParseState::GroupStart | OptionParseState::Key => "an option name",

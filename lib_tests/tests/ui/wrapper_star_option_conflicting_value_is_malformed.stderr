@@ -1,0 +1,10 @@
+error: Duplicate option is specified: case
+  --> tests/ui/wrapper_star_option_conflicting_value_is_malformed.rs:9:22
+   |
+ 9 |     ($($x:tt)*) => { paths!($($x)*; case = "camel") };
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+13 |     let _ = camel_paths!(TestStruct::*; case = "pascal");
+   |             -------------------------------------------- in this macro invocation
+   |
+   = note: this error originates in the macro `paths` which comes from the expansion of the macro `camel_paths` (in Nightly builds, run with -Z macro-backtrace for more info)

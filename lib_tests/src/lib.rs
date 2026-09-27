@@ -364,6 +364,23 @@ mod tests {
             camel_paths!(TestStructMixedVisibility::*; visibility = "all"),
             ["valueStr", "valueCrate", "valuePrivate"]
         );
+
+        // The caller's own trailing comma ends its group just before the
+        // wrapper's `;`, for both `Type::*` and the nested form.
+        assert_eq!(
+            camel_paths!(TestStructMixedVisibility::*; visibility = "all",),
+            ["valueStr", "valueCrate", "valuePrivate"]
+        );
+        assert_eq!(
+            camel_paths!(StarParent::opt_child~(StarChild::*); delim = "/",),
+            ["optChild/a", "optChild/b"]
+        );
+
+        // The caller repeating the wrapper's own option with the same value.
+        assert_eq!(
+            camel_paths!(TestStructAllFields::*; case = "camel"),
+            ["valueStr", "valueNum"]
+        );
     }
 
     #[test]
@@ -455,6 +472,16 @@ mod tests {
         assert_eq!(
             paths!(StarParent::child.(StarChild::*);;),
             ["child.a", "child.b"]
+        );
+
+        // A trailing `,` may close a group right before the next `;`.
+        assert_eq!(
+            paths!(TestStructMixedVisibility::*; visibility = "all", ;),
+            ["value_str", "value_crate", "value_private"]
+        );
+        assert_eq!(
+            paths!(StarParent::child.(StarChild::*); case = "pascal", ;),
+            ["Child.A", "Child.B"]
         );
     }
 
