@@ -1,3 +1,7 @@
+#[cfg(doctest)]
+#[doc = include_str!("../../README.md")]
+pub struct ReadmeDoctests;
+
 #[allow(dead_code)]
 #[cfg(test)]
 mod tests {

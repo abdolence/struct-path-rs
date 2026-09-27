@@ -1,6 +1,6 @@
 [![Cargo](https://img.shields.io/crates/v/struct-path.svg)](https://crates.io/crates/struct-path)
-![tests and formatting](https://github.com/abdolence/struct-path-rs/workflows/tests%20&amp;%20formatting/badge.svg)
-![security audit](https://github.com/abdolence/struct-path-rs/workflows/security%20audit/badge.svg)
+[![tests & formatting](https://github.com/abdolence/struct-path-rs/actions/workflows/tests.yml/badge.svg)](https://github.com/abdolence/struct-path-rs/actions/workflows/tests.yml)
+[![security audit](https://github.com/abdolence/struct-path-rs/actions/workflows/security-audit.yml/badge.svg)](https://github.com/abdolence/struct-path-rs/actions/workflows/security-audit.yml)
 
 # struct-path for Rust
 
@@ -32,7 +32,7 @@ pub struct TestStructParent {
     pub value_str: String,
     pub value_num: u64,
     pub value_child: TestStructChild,
-    pub opt_value_str: Option<TestStructChild>,
+    pub opt_value_child: Option<TestStructChild>,
 }
 
 pub struct TestStructChild {
@@ -60,6 +60,12 @@ let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
 
 
 ```
+
+## Options
+
+- `delim = "<str>"`: sets the path separator, defaults to `.`;
+- `case = "camel"` or `case = "pascal"`: converts each segment to camelCase or PascalCase;
+- `~`: walks into an `Iter`-based type, such as `Option` or `Vec`, instead of `.`;
 
 ## Licence
 Apache Software License (ASL)
