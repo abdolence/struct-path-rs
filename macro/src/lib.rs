@@ -488,15 +488,7 @@ fn generate_checks_code_for(found_structs: &[(String, Vec<String>)]) -> String {
             .map(|field_path| {
                 let field_path_result = field_path.replace('~', ".iter().next().unwrap().");
                 format!(
-                    r#"
-                {{
-                    #[allow(dead_code, unused_variables)]
-                    #[cold]
-                    fn _check_sp(test_struct: &{}) {{
-                        let _t = &test_struct.{};
-                    }}
-                }}
-            "#,
+                    "const _: fn(&{0}) = |t: &{0}| {{ let _ = &t.{1}; }};",
                     struct_name, field_path_result
                 )
             })
