@@ -54,7 +54,7 @@
 //!
 
 use convert_case::{Case, Casing};
-use proc_macro::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, Span, TokenStream, TokenTree};
 use std::collections::HashMap;
 
 /// Converts a parse-time error into the token stream for a `compile_error!`
@@ -66,30 +66,12 @@ fn compile_error_for(message: String) -> TokenStream {
         .expect("a compile_error! invocation with an escaped string literal always parses")
 }
 
-/// One token of a parsed type path (`crate::tests::TestStructParent`).
-/// `Sep` stands for the `::` between segments; unlike an `Ident`, it has no
-/// single token in the user's input worth pointing an error at, so it is
-/// always rendered at `Span::call_site()`.
-enum StructTok {
-    Ident(Ident),
-    Sep,
-}
-
-/// One token of a parsed field path (`value_child.child_value_str` or
-/// `opt_value_child~child_value_str`). `Tilde` keeps the original `~`
-/// punct's span so that a stepped-into type missing `iter()` is blamed on
-/// the `~` the user wrote, not on the whole macro invocation. This is the
-/// only record kept of a field path: both the type-check and the macro's
-/// returned string are rendered from it, so the two can never disagree.
-enum FieldTok {
-    Ident(Ident),
-    Dot,
-    Tilde(Span),
-}
-
 /// The type path and field paths found for one `Type::field[, field...]`
-/// group.
-type FoundStructs = Vec<(Vec<StructTok>, Vec<Vec<FieldTok>>)>;
+/// group, kept as the user's own tokens so the generated check reports a
+/// type error on the exact token that is wrong. A field path holds its
+/// idents, `.` and `~` puncts as written; it is the only record kept of the
+/// path, so the check and the returned string can never disagree.
+type FoundStructs = Vec<(Vec<TokenTree>, Vec<Vec<TokenTree>>)>;
 
 #[proc_macro]
 pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
@@ -100,14 +82,14 @@ pub fn paths(struct_path_stream: TokenStream) -> TokenStream {
 }
 
 fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
-    let mut current_struct_name_tokens: Vec<StructTok> = Vec::new();
-    let mut current_struct_fields: Vec<Vec<FieldTok>> = Vec::with_capacity(16);
+    let mut current_struct_name_tokens: Vec<TokenTree> = Vec::new();
+    let mut current_struct_fields: Vec<Vec<TokenTree>> = Vec::with_capacity(16);
 
     let mut opened_struct = false;
     let mut colons_counter = 0;
     let mut options_opened = false;
 
-    let mut current_field_tokens: Vec<FieldTok> = Vec::new();
+    let mut current_field_tokens: Vec<TokenTree> = Vec::new();
 
     let mut current_option_name: Option<String> = None;
     let mut expect_option_value: bool = false;
@@ -118,7 +100,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
     for token_tree in struct_path_stream.into_iter() {
         match token_tree {
             TokenTree::Ident(id) if current_struct_name_tokens.is_empty() => {
-                current_struct_name_tokens.push(StructTok::Ident(id));
+                current_struct_name_tokens.push(TokenTree::Ident(id));
             }
             TokenTree::Punct(punct)
                 if !current_struct_name_tokens.is_empty()
@@ -133,7 +115,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
             }
             TokenTree::Ident(id) if opened_struct => {
                 colons_counter = 0;
-                current_field_tokens.push(FieldTok::Ident(id));
+                current_field_tokens.push(TokenTree::Ident(id));
             }
             TokenTree::Punct(punct)
                 if !current_struct_name_tokens.is_empty()
@@ -158,11 +140,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                         punct
                     ));
                 }
-                current_field_tokens.push(if punct == '~' {
-                    FieldTok::Tilde(punct.span())
-                } else {
-                    FieldTok::Dot
-                });
+                current_field_tokens.push(TokenTree::Punct(punct));
             }
             TokenTree::Group(group) if opened_struct && current_field_tokens.is_empty() => {
                 parse_multiple_fields(group.stream(), &mut current_struct_fields)?
@@ -179,7 +157,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                 if current_struct_fields.is_empty() {
                     return Err(format!(
                         "Unexpected comma with empty fields for {}!",
-                        render_struct_name(&current_struct_name_tokens)
+                        render_text(&current_struct_name_tokens)
                     ));
                 }
                 found_structs.push((
@@ -240,7 +218,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
     if current_struct_fields.is_empty() {
         return Err(format!(
             "Unexpected comma with empty fields for {}!",
-            render_struct_name(&current_struct_name_tokens)
+            render_text(&current_struct_name_tokens)
         ));
     }
     found_structs.push((current_struct_name_tokens, current_struct_fields));
@@ -251,7 +229,7 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
 
     for (_, fields) in &found_structs {
         for field_tokens in fields {
-            let mut final_field_path = render_field_text(field_tokens).replace('~', ".");
+            let mut final_field_path = render_text(field_tokens).replace('~', ".");
             if !options.is_empty() {
                 final_field_path = apply_options(&options, final_field_path)?;
             }
@@ -278,56 +256,32 @@ fn paths_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
 /// segment; the caller then reports the input as malformed instead of
 /// building a check around it.
 fn fold_field_into_struct_name(
-    field_tokens: Vec<FieldTok>,
-    struct_name_tokens: &mut Vec<StructTok>,
+    field_tokens: Vec<TokenTree>,
+    struct_name_tokens: &mut Vec<TokenTree>,
 ) -> bool {
-    let mut iter = field_tokens.into_iter();
-    match (iter.next(), iter.next()) {
-        (Some(FieldTok::Ident(id)), None) => {
-            struct_name_tokens.push(StructTok::Sep);
-            struct_name_tokens.push(StructTok::Ident(id));
-            true
-        }
-        _ => false,
+    let is_single_ident = matches!(field_tokens.as_slice(), [TokenTree::Ident(_)]);
+    if is_single_ident {
+        struct_name_tokens.extend("::".parse::<TokenStream>().expect("`::` always parses"));
+        struct_name_tokens.extend(field_tokens);
     }
+    is_single_ident
 }
 
-/// Renders a parsed type path back to text, for diagnostics only; the
-/// tokens are the only representation kept while parsing.
-fn render_struct_name(tokens: &[StructTok]) -> String {
-    let mut out = String::new();
-    for tok in tokens {
-        match tok {
-            StructTok::Ident(id) => out.push_str(&id.to_string()),
-            StructTok::Sep => out.push_str("::"),
-        }
-    }
-    out
-}
-
-/// Renders a parsed field path back to its text as written, `~` included, so
-/// a caller replacing it with a delimiter still sees each collection step.
-fn render_field_text(tokens: &[FieldTok]) -> String {
-    let mut out = String::new();
-    for tok in tokens {
-        match tok {
-            FieldTok::Ident(id) => out.push_str(&id.to_string()),
-            FieldTok::Dot => out.push('.'),
-            FieldTok::Tilde(_) => out.push('~'),
-        }
-    }
-    out
+/// Renders parsed path tokens back to their text as written, `~` included,
+/// so a caller replacing it with a delimiter still sees each collection step.
+fn render_text(tokens: &[TokenTree]) -> String {
+    tokens.iter().map(|token| token.to_string()).collect()
 }
 
 fn parse_multiple_fields(
     group_stream: TokenStream,
-    found_struct_fields: &mut Vec<Vec<FieldTok>>,
+    found_struct_fields: &mut Vec<Vec<TokenTree>>,
 ) -> Result<(), String> {
-    let mut current_field_tokens: Vec<FieldTok> = Vec::new();
+    let mut current_field_tokens: Vec<TokenTree> = Vec::new();
 
     for token_tree in group_stream.into_iter() {
         match token_tree {
-            TokenTree::Ident(id) => current_field_tokens.push(FieldTok::Ident(id)),
+            TokenTree::Ident(id) => current_field_tokens.push(TokenTree::Ident(id)),
             TokenTree::Punct(punct) if punct == ',' => {
                 if current_field_tokens.is_empty() {
                     return Err(format!(
@@ -344,7 +298,7 @@ fn parse_multiple_fields(
                         punct
                     ));
                 }
-                current_field_tokens.push(FieldTok::Dot);
+                current_field_tokens.push(TokenTree::Punct(punct));
             }
             others => {
                 return Err(format!(
@@ -370,13 +324,13 @@ pub fn path(struct_path_stream: TokenStream) -> TokenStream {
 }
 
 fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
-    let mut current_struct_name_tokens: Vec<StructTok> = Vec::new();
+    let mut current_struct_name_tokens: Vec<TokenTree> = Vec::new();
 
     let mut opened_struct = false;
     let mut colons_counter = 0;
     let mut options_opened = false;
 
-    let mut current_field_tokens: Vec<FieldTok> = Vec::new();
+    let mut current_field_tokens: Vec<TokenTree> = Vec::new();
 
     let mut current_option_name: Option<String> = None;
     let mut expect_option_value: bool = false;
@@ -387,7 +341,7 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
     for token_tree in struct_path_stream.into_iter() {
         match token_tree {
             TokenTree::Ident(id) if current_struct_name_tokens.is_empty() => {
-                current_struct_name_tokens.push(StructTok::Ident(id));
+                current_struct_name_tokens.push(TokenTree::Ident(id));
             }
             TokenTree::Punct(punct)
                 if !current_struct_name_tokens.is_empty()
@@ -402,7 +356,7 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
             }
             TokenTree::Ident(id) if opened_struct => {
                 colons_counter = 0;
-                current_field_tokens.push(FieldTok::Ident(id));
+                current_field_tokens.push(TokenTree::Ident(id));
             }
             TokenTree::Punct(punct)
                 if !current_struct_name_tokens.is_empty()
@@ -427,11 +381,7 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                         punct
                     ));
                 }
-                current_field_tokens.push(if punct == '~' {
-                    FieldTok::Tilde(punct.span())
-                } else {
-                    FieldTok::Dot
-                });
+                current_field_tokens.push(TokenTree::Punct(punct));
             }
             TokenTree::Punct(punct) if !options_opened && opened_struct && punct == ',' => {
                 opened_struct = false;
@@ -442,7 +392,7 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
                 if current_field_tokens.is_empty() {
                     return Err(format!(
                         "Unexpected comma with empty fields for {}!",
-                        render_struct_name(&current_struct_name_tokens)
+                        render_text(&current_struct_name_tokens)
                     ));
                 }
                 found_structs.push((
@@ -510,7 +460,7 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
     let full_field_path = found_structs
         .iter()
         .flat_map(|(_, fields)| fields.iter())
-        .map(|tokens| render_field_text(tokens))
+        .map(|tokens| render_text(tokens))
         .collect::<Vec<_>>()
         .join(".")
         .replace('~', ".");
@@ -528,122 +478,65 @@ fn path_impl(struct_path_stream: TokenStream) -> Result<TokenStream, String> {
 }
 
 /// Builds the `const _: fn(&Type) = |t: &Type| { let _ = &t.field; };`
-/// check for every discovered `Type::field` pair. Type-path and field
-/// identifiers keep the user's own spans, so a type error is reported on
-/// the exact token that is wrong; `~` is expanded to
-/// `.iter().next().unwrap().` at the `~` token's span; everything else in
-/// the check (`const`, `_`, `fn`, `t`, `let`) has no counterpart in the
-/// user's input and stays at `Span::call_site()`.
+/// check for every discovered `Type::field` pair. The user's type and field
+/// tokens keep their spans, so a type error is reported on the exact token
+/// that is wrong; each `~` becomes `.iter().next().unwrap().` spanned at that
+/// `~`, so a stepped-into type without `iter()` is blamed on the `~`.
 fn generate_checks_code_for(found_structs: &FoundStructs) -> TokenStream {
-    let mut output = TokenStream::new();
-    for (struct_tokens, fields) in found_structs {
-        for field_tokens in fields {
-            output.extend(build_check_tokens(struct_tokens, field_tokens));
+    let mut all_check_functions = TokenStream::new();
+    for (struct_name_tokens, struct_fields) in found_structs {
+        let struct_name: TokenStream = struct_name_tokens.iter().cloned().collect();
+        for field_tokens in struct_fields {
+            let field_path: TokenStream = field_tokens
+                .iter()
+                .map(|token| match token {
+                    TokenTree::Punct(punct) if *punct == '~' => {
+                        fill(".iter().next().unwrap().", punct.span(), &[])
+                    }
+                    token => token.clone().into(),
+                })
+                .collect();
+            all_check_functions.extend(fill(
+                "const _: fn(&STRUCT) = |t: &STRUCT| { let _ = &t.FIELD; };",
+                Span::call_site(),
+                &[("STRUCT", &struct_name), ("FIELD", &field_path)],
+            ));
         }
     }
-    output
+    all_check_functions
 }
 
-fn build_check_tokens(struct_tokens: &[StructTok], field_tokens: &[FieldTok]) -> TokenStream {
-    let call_site = Span::call_site();
-    let type_tokens = render_struct_type(struct_tokens);
-
-    let mut fn_param_tokens = TokenStream::new();
-    fn_param_tokens.extend([TokenTree::Punct(Punct::new('&', Spacing::Alone))]);
-    fn_param_tokens.extend(type_tokens.clone());
-
-    let mut closure_param_tokens = TokenStream::new();
-    closure_param_tokens.extend([
-        TokenTree::Ident(Ident::new("t", call_site)),
-        TokenTree::Punct(Punct::new(':', Spacing::Alone)),
-        TokenTree::Punct(Punct::new('&', Spacing::Alone)),
-    ]);
-    closure_param_tokens.extend(type_tokens);
-
-    let mut body_tokens = TokenStream::new();
-    body_tokens.extend([
-        TokenTree::Ident(Ident::new("let", call_site)),
-        TokenTree::Ident(Ident::new("_", call_site)),
-        TokenTree::Punct(Punct::new('=', Spacing::Alone)),
-        TokenTree::Punct(Punct::new('&', Spacing::Alone)),
-        TokenTree::Ident(Ident::new("t", call_site)),
-        TokenTree::Punct(Punct::new('.', Spacing::Alone)),
-    ]);
-    body_tokens.extend(render_field_expr(field_tokens));
-    body_tokens.extend([TokenTree::Punct(Punct::new(';', Spacing::Alone))]);
-
-    let mut closure_tokens = TokenStream::new();
-    closure_tokens.extend([TokenTree::Punct(Punct::new('|', Spacing::Alone))]);
-    closure_tokens.extend(closure_param_tokens);
-    closure_tokens.extend([TokenTree::Punct(Punct::new('|', Spacing::Alone))]);
-    closure_tokens.extend([TokenTree::Group(Group::new(Delimiter::Brace, body_tokens))]);
-
-    let mut result = TokenStream::new();
-    result.extend([
-        TokenTree::Ident(Ident::new("const", call_site)),
-        TokenTree::Ident(Ident::new("_", call_site)),
-        TokenTree::Punct(Punct::new(':', Spacing::Alone)),
-        TokenTree::Ident(Ident::new("fn", call_site)),
-        TokenTree::Group(Group::new(Delimiter::Parenthesis, fn_param_tokens)),
-        TokenTree::Punct(Punct::new('=', Spacing::Alone)),
-    ]);
-    result.extend(closure_tokens);
-    result.extend([TokenTree::Punct(Punct::new(';', Spacing::Alone))]);
-    result
-}
-
-fn render_struct_type(tokens: &[StructTok]) -> TokenStream {
-    let mut out = TokenStream::new();
-    for tok in tokens {
-        match tok {
-            StructTok::Ident(id) => out.extend([TokenTree::Ident(id.clone())]),
-            StructTok::Sep => out.extend([
-                TokenTree::Punct(Punct::new(':', Spacing::Joint)),
-                TokenTree::Punct(Punct::new(':', Spacing::Alone)),
-            ]),
-        }
+/// Parses `template` into tokens spanned at `span`, replacing each ident
+/// named in `substitutions` with the given tokens, which keep their own
+/// spans. `template` must be valid Rust tokens.
+fn fill(template: &str, span: Span, substitutions: &[(&str, &TokenStream)]) -> TokenStream {
+    fn walk(stream: TokenStream, span: Span, subs: &[(&str, &TokenStream)]) -> TokenStream {
+        stream
+            .into_iter()
+            .map(|mut token| {
+                match &token {
+                    TokenTree::Ident(ident) => {
+                        let name = ident.to_string();
+                        if let Some((_, tokens)) = subs.iter().find(|(n, _)| *n == name) {
+                            return (*tokens).clone();
+                        }
+                    }
+                    TokenTree::Group(group) => {
+                        let stream = walk(group.stream(), span, subs);
+                        token = TokenTree::Group(Group::new(group.delimiter(), stream));
+                    }
+                    _ => {}
+                }
+                token.set_span(span);
+                token.into()
+            })
+            .collect()
     }
-    out
-}
-
-fn render_field_expr(tokens: &[FieldTok]) -> TokenStream {
-    let mut out = TokenStream::new();
-    for tok in tokens {
-        match tok {
-            FieldTok::Ident(id) => out.extend([TokenTree::Ident(id.clone())]),
-            FieldTok::Dot => out.extend([TokenTree::Punct(Punct::new('.', Spacing::Alone))]),
-            FieldTok::Tilde(span) => out.extend(tilde_step_tokens(*span)),
-        }
-    }
-    out
-}
-
-/// Every token here stands in for one `~`, so all of them carry the `~`
-/// punct's own span: a stepped-into type missing `iter()` is then blamed on
-/// the `~` the user wrote, matching where the collection step is spelled in
-/// the source, rather than on the whole macro invocation.
-fn tilde_step_tokens(span: Span) -> TokenStream {
-    fn spanned_dot(span: Span) -> TokenTree {
-        let mut dot = Punct::new('.', Spacing::Alone);
-        dot.set_span(span);
-        TokenTree::Punct(dot)
-    }
-    fn spanned_call(method: &str, span: Span) -> [TokenTree; 2] {
-        let mut group = Group::new(Delimiter::Parenthesis, TokenStream::new());
-        group.set_span(span);
-        [
-            TokenTree::Ident(Ident::new(method, span)),
-            TokenTree::Group(group),
-        ]
-    }
-
-    let mut out = TokenStream::new();
-    for method in ["iter", "next", "unwrap"] {
-        out.extend([spanned_dot(span)]);
-        out.extend(spanned_call(method, span));
-    }
-    out.extend([spanned_dot(span)]);
-    out
+    walk(
+        template.parse().expect("templates are valid tokens"),
+        span,
+        substitutions,
+    )
 }
 
 /// Strips the surrounding quotes from a plain string (`"..."`) or char
