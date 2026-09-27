@@ -13,3 +13,6 @@ publish = false
 [dependencies]
 struct-path = { version = "^0.2.5", path = "../macro"}
 
+[dev-dependencies]
+trybuild = "1"
+

@@ -1,0 +1,7 @@
+error: Unknown case is specified: kebab
+ --> tests/ui/unknown_case.rs:8:13
+  |
+8 |     let _ = path!(TestStruct::value_str; case = "kebab");
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `path` (in Nightly builds, run with -Z macro-backtrace for more info)
