@@ -14,6 +14,7 @@ Features:
 - Optional camelCase and PascalCase conversion support;
 - Optional delimiter parameter;
 - Support for `Iter`-based (Option, Vec, etc) paths using `~` delimiter;
+- `#[derive(StructPath)]` to return all of a struct's declared fields via `Type::*`, without listing them by hand;
 
 ## Quick start
 
@@ -58,14 +59,28 @@ let s5: &str = path!(TestStructParent::value_child.child_value_str; delim="/", c
 // returns ["value_str", "value_num"]
 let arr: [&str; 2] = paths!(TestStructParent::{ value_str, value_num });
 
+#[derive(StructPath)]
+pub struct TestStructWithPrivate {
+    pub value_str: String,
+    value_internal: String,
+}
+
+// returns ["value_str"], only the field declared with plain `pub`
+let pub_only: [&str; 1] = paths!(TestStructWithPrivate::*);
+
+// returns ["value_str", "value_internal"], every declared field
+let all_fields: [&str; 2] = paths!(TestStructWithPrivate::*; visibility="all");
 
 ```
+
+`Type::*` needs `#[derive(StructPath)]` on `Type`; without it there is no field list for the macro to return.
 
 ## Options
 
 - `delim = "<str>"`: sets the path separator, defaults to `.`;
 - `case = "camel"` or `case = "pascal"`: converts each segment to camelCase or PascalCase;
 - `~`: walks into a type with an `iter()` method, such as `Option` or `Vec`, instead of `.`;
+- `visibility = "all"`: with `Type::*`, returns every declared field instead of only the ones declared plain `pub`;
 
 ## Licence
 Apache Software License (ASL)
