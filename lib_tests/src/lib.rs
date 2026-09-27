@@ -243,4 +243,80 @@ mod tests {
         let test_all = paths!(TestStructFromItemVisFragment::*; visibility = "all");
         assert_eq!(test_all, ["value_str"]);
     }
+
+    #[derive(StructPath)]
+    pub struct StarChild {
+        pub a: String,
+        pub b: u64,
+    }
+
+    #[derive(StructPath)]
+    pub struct StarChildMixedVisibility {
+        pub a: String,
+        pub(crate) b: u64,
+    }
+
+    pub struct StarMiddle {
+        pub child: StarChild,
+    }
+
+    pub mod star_nested {
+        use struct_path::StructPath;
+
+        #[derive(StructPath)]
+        pub struct StarNestedChild {
+            pub y: String,
+        }
+    }
+
+    pub struct StarParent {
+        pub child: StarChild,
+        pub middle: StarMiddle,
+        pub opt_child: Option<StarChild>,
+        pub vec_child: Vec<StarChild>,
+        pub boxed_child: Box<StarChild>,
+        pub mixed_child: StarChildMixedVisibility,
+        pub mod_child: star_nested::StarNestedChild,
+    }
+
+    #[test]
+    fn struct_paths_nested_all_fields() {
+        let test_direct = paths!(StarParent::child.(StarChild::*));
+        assert_eq!(test_direct, ["child.a", "child.b"]);
+
+        let test_two_level = paths!(StarParent::middle.child.(StarChild::*));
+        assert_eq!(test_two_level, ["middle.child.a", "middle.child.b"]);
+
+        let test_option = paths!(StarParent::opt_child~(StarChild::*));
+        assert_eq!(test_option, ["opt_child.a", "opt_child.b"]);
+
+        let test_vec = paths!(StarParent::vec_child~(StarChild::*));
+        assert_eq!(test_vec, ["vec_child.a", "vec_child.b"]);
+
+        // `Box<StarChild>` passes the `&StarChild` check through deref
+        // coercion; no `~` is needed the way `Option`/`Vec` need one.
+        let test_boxed = paths!(StarParent::boxed_child.(StarChild::*));
+        assert_eq!(test_boxed, ["boxed_child.a", "boxed_child.b"]);
+
+        let test_case_delim =
+            paths!(StarParent::opt_child~(StarChild::*); case = "camel", delim = "/");
+        assert_eq!(test_case_delim, ["optChild/a", "optChild/b"]);
+
+        let test_pascal = paths!(StarParent::child.(StarChild::*); case = "pascal");
+        assert_eq!(test_pascal, ["Child.A", "Child.B"]);
+
+        let test_default_visibility = paths!(StarParent::mixed_child.(StarChildMixedVisibility::*));
+        assert_eq!(test_default_visibility, ["mixed_child.a"]);
+
+        let test_all_visibility =
+            paths!(StarParent::mixed_child.(StarChildMixedVisibility::*); visibility = "all");
+        assert_eq!(test_all_visibility, ["mixed_child.a", "mixed_child.b"]);
+
+        let test_module_path =
+            paths!(StarParent::mod_child.(crate::tests::star_nested::StarNestedChild::*));
+        assert_eq!(test_module_path, ["mod_child.y"]);
+
+        const CONST_NAMES: [&str; 2] = paths!(StarParent::child.(StarChild::*));
+        assert_eq!(CONST_NAMES, ["child.a", "child.b"]);
+    }
 }

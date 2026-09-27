@@ -15,6 +15,7 @@ Features:
 - Optional delimiter parameter;
 - Support for `Iter`-based (Option, Vec, etc) paths using `~` delimiter;
 - `#[derive(StructPath)]` to return all of a struct's declared fields via `Type::*`, without listing them by hand;
+- `Type::*` nested under a field path, `Parent::child.(Child::*)`, to prefix every one of `Child`'s fields with `child`;
 
 ## Quick start
 
@@ -36,6 +37,7 @@ pub struct TestStructParent {
     pub opt_value_child: Option<TestStructChild>,
 }
 
+#[derive(StructPath)]
 pub struct TestStructChild {
     pub child_value_str: String,
     pub child_value_num: u64,
@@ -71,9 +73,18 @@ let pub_only: [&str; 1] = paths!(TestStructWithPrivate::*);
 // returns ["value_str", "value_internal"], every declared field
 let all_fields: [&str; 2] = paths!(TestStructWithPrivate::*; visibility="all");
 
+// nested `Type::*`: `TestStructChild` also needs `#[derive(StructPath)]`, and
+// is named again inside the parens; returns
+// ["value_child.child_value_str", "value_child.child_value_num"]
+let nested: [&str; 2] = paths!(TestStructParent::value_child.(TestStructChild::*));
+
+// `~` before the parens steps through the `Option`; returns
+// ["opt_value_child.child_value_str", "opt_value_child.child_value_num"]
+let nested_opt: [&str; 2] = paths!(TestStructParent::opt_value_child~(TestStructChild::*));
+
 ```
 
-`Type::*` needs `#[derive(StructPath)]` on `Type`; without it there is no field list for the macro to return.
+`Type::*` needs `#[derive(StructPath)]` on `Type`; without it there is no field list for the macro to return. Nesting it under a field path takes the same requirement: name the inner type again inside the parens, and derive it too.
 
 ### Lint gates on the derive
 

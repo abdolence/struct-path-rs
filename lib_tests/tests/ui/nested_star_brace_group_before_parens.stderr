@@ -1,0 +1,7 @@
+error: a `{ ... }` field group cannot appear before a nested `Type::*`; use a plain field path such as `Parent::child.(Child::*)`
+  --> tests/ui/nested_star_brace_group_before_parens.rs:14:13
+   |
+14 |     let _ = paths!(Parent::{ a, b }.(Child::*));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)

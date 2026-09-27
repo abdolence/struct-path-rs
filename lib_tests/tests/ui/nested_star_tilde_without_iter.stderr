@@ -1,0 +1,7 @@
+error[E0599]: no method named `iter` found for type `u64` in the current scope
+  --> tests/ui/nested_star_tilde_without_iter.rs:13:13
+   |
+13 |     let _ = paths!(Parent::child~(Child::*));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `u64`
+   |
+   = note: this error originates in the macro `paths` (in Nightly builds, run with -Z macro-backtrace for more info)
