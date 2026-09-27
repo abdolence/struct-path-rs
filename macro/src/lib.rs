@@ -305,9 +305,8 @@ fn render_struct_name(tokens: &[StructTok]) -> String {
     out
 }
 
-/// Renders a parsed field path back to the exact text the macro has always
-/// returned for it (`~` included, so a caller replacing it with a delimiter
-/// still sees each collection step).
+/// Renders a parsed field path back to its text as written, `~` included, so
+/// a caller replacing it with a delimiter still sees each collection step.
 fn render_field_text(tokens: &[FieldTok]) -> String {
     let mut out = String::new();
     for tok in tokens {
@@ -648,12 +647,11 @@ fn tilde_step_tokens(span: Span) -> TokenStream {
 }
 
 /// Strips the surrounding quotes from a plain string (`"..."`) or char
-/// (`'.'`) literal, keeping the source spelling of any escapes untouched
-/// rather than decoding them, so `delim`/`case` values compile to the exact
-/// same output they always have. Any other literal kind — numeric, byte
-/// string, byte char, raw string — is rejected here: none of them slice into
-/// a valid value at this offset, and accepting one used to either panic on
-/// the slice bound or hand the raw token text on to generate invalid code.
+/// (`'.'`) literal. Escapes keep their source spelling because the value is
+/// pasted back into a string literal in the generated code; decoding them
+/// would change the output. Any other literal kind (numeric, byte string,
+/// byte char, raw string) is rejected, since its text has no such quotes to
+/// strip and would produce invalid generated code.
 fn unquote_literal(lit: &proc_macro::Literal) -> Result<String, String> {
     let text = lit.to_string();
     let bytes = text.as_bytes();
