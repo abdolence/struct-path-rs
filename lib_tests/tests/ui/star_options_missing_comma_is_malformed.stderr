@@ -1,4 +1,4 @@
-error: Expected `,` in `Type::*` options, found `case`
+error: Expected `,` or `;` in `Type::*` options, found `case`
  --> tests/ui/star_options_missing_comma_is_malformed.rs:9:13
   |
 9 |     let _ = paths!(TestStruct::*; visibility = "all" case = "camel");
